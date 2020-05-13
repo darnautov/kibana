@@ -389,11 +389,11 @@ export class AnnotationsTable extends Component {
             defaultMessage="Edit annotation"
           />
         );
-        const editAnnotationsTooltipAriaLabelText = (
-          <FormattedMessage
-            id="xpack.ml.annotationsTable.editAnnotationsTooltipAriaLabel"
-            defaultMessage="Edit annotation"
-          />
+        const editAnnotationsTooltipAriaLabelText = i18n.translate(
+          'xpack.ml.annotationsTable.editAnnotationsTooltipAriaLabel',
+          {
+            defaultMessage: 'Edit annotation',
+          }
         );
         return (
           <EuiToolTip position="bottom" content={editAnnotationsTooltipText}>
@@ -422,17 +422,16 @@ export class AnnotationsTable extends Component {
               defaultMessage="Job configuration not supported in Single Metric Viewer"
             />
           );
-          const openInSingleMetricViewerAriaLabelText = isDrillDownAvailable ? (
-            <FormattedMessage
-              id="xpack.ml.annotationsTable.openInSingleMetricViewerAriaLabel"
-              defaultMessage="Open in Single Metric Viewer"
-            />
-          ) : (
-            <FormattedMessage
-              id="xpack.ml.annotationsTable.jobConfigurationNotSupportedInSingleMetricViewerAriaLabel"
-              defaultMessage="Job configuration not supported in Single Metric Viewer"
-            />
-          );
+          const openInSingleMetricViewerAriaLabelText = isDrillDownAvailable
+            ? i18n.translate('xpack.ml.annotationsTable.openInSingleMetricViewerAriaLabel', {
+                defaultMessage: 'Open in Single Metric Viewer',
+              })
+            : i18n.translate(
+                'xpack.ml.annotationsTable.jobConfigurationNotSupportedInSingleMetricViewerAriaLabel',
+                {
+                  defaultMessage: 'Job configuration not supported in Single Metric Viewer',
+                }
+              );
 
           return (
             <EuiToolTip position="bottom" content={openInSingleMetricViewerTooltipText}>
