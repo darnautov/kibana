@@ -5,13 +5,14 @@
  * 2.0.
  */
 
-import React, { FC } from 'react';
-
+import React, { FC, useMemo } from 'react';
+import { CodeEditor, CodeEditorProps } from '@kbn/kibana-react-plugin/public';
+import { XJsonLang } from '@kbn/monaco';
+import { useMlApiContext } from '../../../../contexts/kibana';
 import {
+  EuiCodeEditorProps,
   expandLiteralStrings,
   XJsonMode,
-  EuiCodeEditor,
-  EuiCodeEditorProps,
 } from '../../../../../../shared_imports';
 
 export const ML_EDITOR_MODE = { TEXT: 'text', JSON: 'json', XJSON: new XJsonMode() };
@@ -26,6 +27,7 @@ interface MlJobEditorProps {
   theme?: string;
   onChange?: EuiCodeEditorProps['onChange'];
 }
+
 export const MLJobEditor: FC<MlJobEditorProps> = ({
   value,
   height = '500px',
@@ -36,6 +38,8 @@ export const MLJobEditor: FC<MlJobEditorProps> = ({
   theme = 'textmate',
   onChange = () => {},
 }) => {
+  const { autocomplete } = useMlApiContext();
+
   if (mode === ML_EDITOR_MODE.XJSON) {
     try {
       value = expandLiteralStrings(value);
@@ -45,23 +49,54 @@ export const MLJobEditor: FC<MlJobEditorProps> = ({
     }
   }
 
+  const provideCompletionItems = useMemo<
+    Exclude<CodeEditorProps['suggestionProvider'], undefined>['provideCompletionItems']
+  >(() => {
+    return async (model, position, context, token) => {
+      const input = model.getValue();
+
+      try {
+        const res = await autocomplete.suggest({
+          method: 'PUT',
+          url: '/_ml/anomaly_detectors/{job_id}',
+          line: position.lineNumber,
+          column: position.column - 1,
+          jsonInput: input,
+        });
+
+        const suggestions = (res ?? []).map((v) => {
+          return {
+            label: v,
+            kind: 3,
+            insertText: v,
+            range: {
+              startLineNumber: position.lineNumber,
+              startColumn: position.column,
+              endLineNumber: position.lineNumber,
+              endColumn: position.column + v.length,
+            },
+          };
+        });
+
+        return {
+          suggestions,
+        };
+      } catch (e) {}
+    };
+  }, []);
+
   return (
-    <EuiCodeEditor
+    <CodeEditor
+      languageId={XJsonLang.ID}
       value={value}
       width={width}
       height={height}
-      mode={mode}
-      readOnly={readOnly}
-      wrapEnabled={true}
-      showPrintMargin={false}
-      theme={theme}
-      editorProps={{ $blockScrolling: true }}
-      setOptions={{
-        useWorker: syntaxChecking,
-        tabSize: 2,
-        useSoftTabs: true,
+      onChange={(input, event) => {
+        onChange(input);
       }}
-      onChange={onChange}
+      suggestionProvider={{
+        provideCompletionItems,
+      }}
     />
   );
 };

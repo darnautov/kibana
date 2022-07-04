@@ -8,6 +8,7 @@
 import type * as estypes from '@elastic/elasticsearch/lib/api/typesWithBodyKey';
 import { Observable } from 'rxjs';
 import type { HttpStart } from '@kbn/core/public';
+import { autocompleteProvider } from './autocomplete';
 import { HttpService } from '../http_service';
 
 import { annotations } from './annotations';
@@ -721,5 +722,6 @@ export function mlApiServicesProvider(httpService: HttpService) {
     fileDatavisualizer,
     savedObjects: savedObjectsApiProvider(httpService),
     trainedModels: trainedModelsApiProvider(httpService),
+    autocomplete: autocompleteProvider(httpService),
   };
 }

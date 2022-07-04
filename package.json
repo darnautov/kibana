@@ -308,6 +308,7 @@
     "deepmerge": "^4.2.2",
     "del": "^5.1.0",
     "elastic-apm-node": "^3.36.0",
+    "elasticsearch-specification-autocompletion": "../elasticsearch-specification-autocompletion/elasticsearch-specification-autocompletion-1.0.0.tgz",
     "email-addresses": "^5.0.0",
     "execa": "^4.0.2",
     "expiry-js": "0.1.7",
