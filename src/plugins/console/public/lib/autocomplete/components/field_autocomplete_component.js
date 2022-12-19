@@ -10,14 +10,17 @@ import _ from 'lodash';
 import { getAutocompleteInfo, ENTITIES } from '../../../services';
 import { ListComponent } from './list_component';
 
-function FieldGenerator(context) {
-  return _.map(getAutocompleteInfo().getEntityProvider(ENTITIES.FIELDS, context), function (field) {
+async function FieldGenerator(context) {
+  const arr = await getAutocompleteInfo().getEntityProvider(ENTITIES.FIELDS, context);
+  return _.map(arr, function (field) {
     return { name: field.name, meta: field.type };
   });
 }
 
 export class FieldAutocompleteComponent extends ListComponent {
   constructor(name, parent, multiValued) {
+    console.log('__FieldAutocompleteComponent____');
+
     super(name, FieldGenerator, parent, multiValued);
   }
   validateTokens(tokens) {

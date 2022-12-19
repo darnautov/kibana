@@ -38,11 +38,12 @@ export class Alias implements BaseAlias {
 
   loadAliases = (aliases: IndicesGetAliasResponse, collaborator: BaseMapping) => {
     this.perAliasIndexes = {};
-    const perIndexTypes = collaborator.perIndexTypes;
+    // const perIndexTypes = collaborator.perIndexTypes;
 
     Object.entries(aliases).forEach(([index, indexAliases]) => {
       // verify we have an index defined. useful when mapping loading is disabled
-      perIndexTypes[index] = perIndexTypes[index] || {};
+      // FIXME we should not mutate mappings cache here
+      // perIndexTypes[index] = perIndexTypes[index] || {};
       Object.keys(indexAliases.aliases || {}).forEach((alias) => {
         if (alias === index) {
           return;

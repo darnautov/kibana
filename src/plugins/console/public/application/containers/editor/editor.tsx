@@ -33,6 +33,8 @@ export const Editor = memo(({ loading, setEditorInstance }: Props) => {
   const { currentTextObject } = useEditorReadContext();
   const { requestInFlight } = useRequestReadContext();
 
+  console.log(currentTextObject, '___currentTextObject___');
+
   const [firstPanelWidth, secondPanelWidth] = storage.get(StorageKeys.WIDTH, [
     INITIAL_PANEL_WIDTH,
     INITIAL_PANEL_WIDTH,

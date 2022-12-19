@@ -65,6 +65,8 @@ GET \${exampleVariable1} // _search
 const inputId = 'ConAppInputTextarea';
 
 function EditorUI({ initialTextValue, setEditorInstance }: EditorProps) {
+  // console.log(initialTextValue, '___initialTextValue___');
+
   const {
     services: {
       history,

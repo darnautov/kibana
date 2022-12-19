@@ -557,7 +557,7 @@ export default function ({
     editor.on('changeSelection', editorChangeListener);
   }
 
-  function getAutoCompleteContext(ctxEditor: CoreEditor, pos: Position) {
+  async function getAutoCompleteContext(ctxEditor: CoreEditor, pos: Position) {
     // deduces all the parameters need to position and insert the auto complete
     const context: AutoCompleteContext = {
       autoCompleteSet: null, // instructions for what can be here
@@ -576,6 +576,9 @@ export default function ({
     //  context.updatedForToken.row = pos.row; // extend
 
     context.autoCompleteType = getAutoCompleteType(pos);
+    console.log(context.autoCompleteType, '___context.autoCompleteType___');
+    // debugger;
+
     switch (context.autoCompleteType) {
       case 'path':
         addPathAutoCompleteSetToContext(context, pos);
@@ -587,13 +590,17 @@ export default function ({
         addMethodAutoCompleteSetToContext(context);
         break;
       case 'body':
-        addBodyAutoCompleteSetToContext(context, pos);
+        console.log('___BODY___');
+
+        await addBodyAutoCompleteSetToContext(context, pos);
         break;
       default:
         return null;
     }
 
     if (!context.autoCompleteSet) {
+      console.log('__NOTHING____');
+
       return null; // nothing to do..
     }
 
@@ -1012,7 +1019,7 @@ export default function ({
     return context;
   }
 
-  function addBodyAutoCompleteSetToContext(context: AutoCompleteContext, pos: Position) {
+  async function addBodyAutoCompleteSetToContext(context: AutoCompleteContext, pos: Position) {
     const ret = getCurrentMethodAndTokenPaths(editor, pos, parser);
     context.method = ret.method;
     context.otherTokenValues = ret.otherTokenValues;
@@ -1023,13 +1030,15 @@ export default function ({
       return context;
     }
 
-    populateContext(
+    await populateContext(
       ret.urlTokenPath,
       context,
       editor,
       false,
       getTopLevelUrlCompleteComponents(context.method)
     );
+
+    console.log(_.cloneDeep(context), '???___context___');
 
     context.bodyTokenPath = ret.bodyTokenPath;
     if (!ret.bodyTokenPath) {
@@ -1047,7 +1056,7 @@ export default function ({
     } else {
       components = getUnmatchedEndpointComponents();
     }
-    populateContext(ret.bodyTokenPath, context, editor, true, components);
+    await populateContext(ret.bodyTokenPath, context, editor, true, components);
 
     return context;
   }
@@ -1129,75 +1138,83 @@ export default function ({
     callback: (e: Error | null, result: ResultTerm[] | null) => void
   ) {
     try {
-      const context = getAutoCompleteContext(editor, position);
-      if (!context) {
-        callback(null, []);
-      } else {
-        const terms = _.map(
-          context.autoCompleteSet!.filter((term) => Boolean(term) && term.name != null),
-          function (term) {
-            if (typeof term !== 'object') {
-              term = {
-                name: term,
-              };
-            } else {
-              term = _.clone(term);
-            }
-            const defaults: {
-              value?: string;
-              meta: string;
-              score: number;
-              context: AutoCompleteContext;
-              completer?: { insertMatch: (v: unknown) => void };
-            } = {
-              value: term.name,
-              meta: 'API',
-              score: 0,
-              context,
-            };
-            // we only need our custom insertMatch behavior for the body
-            if (context.autoCompleteType === 'body') {
-              defaults.completer = {
-                insertMatch() {
-                  return applyTerm(term);
-                },
-              };
-            }
-            return _.defaults(term, defaults);
-          }
-        );
+      // const context = getAutoCompleteContext(editor, position);
+      // console.log(context, '!!___context___');
 
-        terms.sort(function (
-          t1: { score: number; name?: string },
-          t2: { score: number; name?: string }
-        ) {
-          /* score sorts from high to low */
-          if (t1.score > t2.score) {
-            return -1;
-          }
-          if (t1.score < t2.score) {
+      console.log(editor, '___editor___');
+
+      getAutoCompleteContext(editor, position).then((context) => {
+        console.log(context, '___context___');
+
+        if (!context) {
+          callback(null, []);
+        } else {
+          const terms = _.map(
+            context.autoCompleteSet!.filter((term) => Boolean(term) && term.name != null),
+            function (term) {
+              if (typeof term !== 'object') {
+                term = {
+                  name: term,
+                };
+              } else {
+                term = _.clone(term);
+              }
+              const defaults: {
+                value?: string;
+                meta: string;
+                score: number;
+                context: AutoCompleteContext;
+                completer?: { insertMatch: (v: unknown) => void };
+              } = {
+                value: term.name,
+                meta: 'API',
+                score: 0,
+                context,
+              };
+              // we only need our custom insertMatch behavior for the body
+              if (context.autoCompleteType === 'body') {
+                defaults.completer = {
+                  insertMatch() {
+                    return applyTerm(term);
+                  },
+                };
+              }
+              return _.defaults(term, defaults);
+            }
+          );
+
+          terms.sort(function (
+            t1: { score: number; name?: string },
+            t2: { score: number; name?: string }
+          ) {
+            /* score sorts from high to low */
+            if (t1.score > t2.score) {
+              return -1;
+            }
+            if (t1.score < t2.score) {
+              return 1;
+            }
+            /* names sort from low to high */
+            if (t1.name! < t2.name!) {
+              return -1;
+            }
+            if (t1.name === t2.name) {
+              return 0;
+            }
             return 1;
-          }
-          /* names sort from low to high */
-          if (t1.name! < t2.name!) {
-            return -1;
-          }
-          if (t1.name === t2.name) {
-            return 0;
-          }
-          return 1;
-        });
+          });
 
-        callback(
-          null,
-          _.map(terms, function (t, i) {
-            t.insertValue = t.insertValue || t.value;
-            t.value = '' + t.value; // normalize to strings
-            t.score = -i;
-            return t;
-          })
-        );
-      }
+          callback(
+            null,
+            _.map(terms, function (t, i) {
+              t.insertValue = t.insertValue || t.value;
+              t.value = '' + t.value; // normalize to strings
+              t.score = -i;
+              return t;
+            })
+          );
+        }
+      });
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);

@@ -110,7 +110,10 @@ export function walkTokenPath(tokenPath, walkingStates, context, editor) {
   return walkTokenPath(tokenPath.slice(1), nextWalkingStates, context, editor);
 }
 
-export function populateContext(tokenPath, context, editor, includeAutoComplete, components) {
+export async function populateContext(tokenPath, context, editor, includeAutoComplete, components) {
+  console.log('___POPULATE CONTEXT___');
+  // console.trace();
+
   let walkStates = walkTokenPath(
     tokenPath,
     [new WalkingState('ROOT', components, [])],
@@ -118,20 +121,31 @@ export function populateContext(tokenPath, context, editor, includeAutoComplete,
     editor
   );
   if (includeAutoComplete) {
-    let autoCompleteSet = [];
-    _.each(walkStates, function (ws) {
-      const contextForState = passThroughContext(context, ws.contextExtensionList);
-      _.each(ws.components, function (component) {
-        _.each(component.getTerms(contextForState, editor), function (term) {
-          if (!_.isObject(term)) {
-            term = { name: term };
-          }
-          autoCompleteSet.push(term);
-        });
+    const autoCompleteSet = new Set();
+
+    const resultsWs = (
+      await Promise.all(
+        walkStates.map((ws) => {
+          const contextForState = passThroughContext(context, ws.contextExtensionList);
+          return Promise.all(
+            ws.components.map((component) => {
+              return component.getTerms(contextForState, editor);
+            })
+          );
+        })
+      )
+    ).flat();
+
+    resultsWs.forEach((rWs) => {
+      rWs.forEach((term) => {
+        if (!_.isObject(term)) {
+          term = { name: term };
+        }
+        autoCompleteSet.add(term);
       });
     });
-    autoCompleteSet = _.uniq(autoCompleteSet);
-    context.autoCompleteSet = autoCompleteSet;
+
+    context.autoCompleteSet = [...autoCompleteSet];
   }
 
   // apply what values were set so far to context, selecting the deepest on which sets the context

@@ -93,7 +93,11 @@ export class AutocompleteInfo {
   }
 
   private load(data: AutoCompleteEntitiesApiResponse) {
-    this.mapping.loadMappings(data.mappings);
+    console.log(data.mappings, '___data.mappings___');
+
+    // Removing this line breaks stuff
+    // this.mapping.loadMappings(data.mappings);
+    // this.mapping.loadMappings({});
     const collaborator = this.mapping;
     this.alias.loadAliases(data.aliases, collaborator);
     this.indexTemplate.loadTemplates(data.indexTemplates);

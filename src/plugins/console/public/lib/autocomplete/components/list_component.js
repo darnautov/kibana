@@ -9,18 +9,23 @@
 import _ from 'lodash';
 import { SharedComponent } from './shared_component';
 /** A component that suggests one of the give options, but accepts anything */
+// TODO all classes extending ListComponent need to update the list callback to return Promise
 export class ListComponent extends SharedComponent {
   constructor(name, list, parent, multiValued, allowNonValidValues) {
     super(name, parent);
+
     this.listGenerator = Array.isArray(list)
       ? function () {
-          return list;
+          return Promise.resolve(list);
         }
       : list;
+
     this.multiValued = _.isUndefined(multiValued) ? true : multiValued;
     this.allowNonValidValues = _.isUndefined(allowNonValidValues) ? false : allowNonValidValues;
   }
-  getTerms(context, editor) {
+  async getTerms(context, editor) {
+    console.log('___GET_TERMS__');
+
     if (!this.multiValued && context.otherTokenValues) {
       // already have a value -> no suggestions
       return [];
@@ -29,7 +34,9 @@ export class ListComponent extends SharedComponent {
     if (_.isString(alreadySet)) {
       alreadySet = [alreadySet];
     }
-    let ret = _.difference(this.listGenerator(context, editor), alreadySet);
+    const list = await this.listGenerator(context, editor);
+
+    let ret = _.difference(list, alreadySet);
 
     if (this.getDefaultTermMeta()) {
       const meta = this.getDefaultTermMeta();
@@ -44,13 +51,16 @@ export class ListComponent extends SharedComponent {
     return ret;
   }
 
-  validateTokens(tokens) {
+  async validateTokens(tokens) {
+    console.trace();
+    console.log('___VALIDATE TOKENS___');
+
     if (!this.multiValued && tokens.length > 1) {
       return false;
     }
 
     // verify we have all tokens
-    const list = this.listGenerator();
+    const list = await this.listGenerator();
     const notFound = _.some(tokens, function (token) {
       return list.indexOf(token) === -1;
     });

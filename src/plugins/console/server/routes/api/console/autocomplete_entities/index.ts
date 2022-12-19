@@ -13,6 +13,7 @@ import { parse } from 'query-string';
 import Boom from '@hapi/boom';
 import type { KibanaRequest } from '@kbn/core-http-server';
 import type { SemVer } from 'semver';
+import { autoCompleteEntitiesValidationConfig } from './validation_config';
 import type { RouteDependencies } from '../../..';
 import { sanitizeHostname } from '../../../../lib/utils';
 import type { ESConfigForProxy } from '../../../../types';
@@ -97,6 +98,8 @@ const getComponentTemplates = async (settings: SettingsToRetrieve, config: Confi
  * @returns The entity retrieved from Elasticsearch.
  */
 const getEntity = (path: string, config: Config) => {
+  console.log(path, '___path___');
+
   return new Promise((resolve, reject) => {
     const { hosts, kibanaVersion } = config;
     for (let idx = 0; idx < hosts.length; idx++) {
@@ -135,6 +138,8 @@ const getEntity = (path: string, config: Config) => {
         req.end();
         break;
       } catch (err) {
+        console.log(err, '___err___');
+
         if (idx === hosts.length - 1) {
           reject(err);
         }
@@ -151,7 +156,8 @@ export const registerAutocompleteEntitiesRoute = (deps: RouteDependencies) => {
       options: {
         tags: ['access:console'],
       },
-      validate: false,
+      validate: autoCompleteEntitiesValidationConfig,
+      // validate: false,
     },
     async (context, request, response) => {
       const settings = parse(request.url.search, {
@@ -172,9 +178,9 @@ export const registerAutocompleteEntitiesRoute = (deps: RouteDependencies) => {
         kibanaVersion: deps.kibanaVersion,
       };
 
-      // Wait for all requests to complete, in case one of them fails return the successfull ones
+      // Wait for all requests to complete, in case one of them fails return the successful ones
       const results = await Promise.allSettled([
-        getMappings(settings, configWithHeaders),
+        // getMappings(settings, configWithHeaders),
         getAliases(settings, configWithHeaders),
         getDataStreams(settings, configWithHeaders),
         getLegacyTemplates(settings, configWithHeaders),
@@ -182,7 +188,7 @@ export const registerAutocompleteEntitiesRoute = (deps: RouteDependencies) => {
         getComponentTemplates(settings, configWithHeaders),
       ]);
 
-      const [mappings, aliases, dataStreams, legacyTemplates, indexTemplates, componentTemplates] =
+      const [aliases, dataStreams, legacyTemplates, indexTemplates, componentTemplates] =
         results.map((result) => {
           // If the request was successful, return the result
           if (result.status === 'fulfilled') {
@@ -199,7 +205,7 @@ export const registerAutocompleteEntitiesRoute = (deps: RouteDependencies) => {
 
       return response.ok({
         body: {
-          mappings,
+          // mappings,
           aliases,
           dataStreams,
           legacyTemplates,

@@ -91,6 +91,8 @@ class ScopeResolver extends SharedComponent {
   }
 
   getTerms(context, editor) {
+    console.log('___BODY COMPLETER___');
+
     const options = [];
     const components = this.resolveLinkToComponents(context, editor);
     _.each(components, function (component) {

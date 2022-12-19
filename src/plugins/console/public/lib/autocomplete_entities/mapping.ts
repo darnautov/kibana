@@ -8,6 +8,7 @@
 
 import _ from 'lodash';
 import type { IndicesGetMappingResponse } from '@elastic/elasticsearch/lib/api/types';
+import { HttpSetup } from '@kbn/core-http-browser';
 import { expandAliases } from './expand_aliases';
 import type { Field, FieldMapping } from './types';
 
@@ -70,22 +71,104 @@ function getFieldNamesFromFieldMapping(
 
 export interface BaseMapping {
   perIndexTypes: Record<string, object>;
-  getMappings(indices: string | string[], types?: string | string[]): Field[];
+  getMappings(indices: string | string[], types?: string | string[]): Promise<Field[]>;
+  /** Stores mappings in memory */
   loadMappings(mappings: IndicesGetMappingResponse): void;
+  fetchMappings(index: string): Promise<IndicesGetMappingResponse>;
   clearMappings(): void;
 }
 
 export class Mapping implements BaseMapping {
+  private http!: HttpSetup;
+
   public perIndexTypes: Record<string, object> = {};
 
-  getMappings = (indices: string | string[], types?: string | string[]) => {
+  public setup(http: HttpSetup) {
+    this.http = http;
+  }
+
+  /**
+   * TODO: Replace mock with the proxy endpoint
+   * @param index
+   */
+  async fetchMappings(index: string): Promise<IndicesGetMappingResponse> {
+    console.log('__FETCH_MAPPING___');
+
+    return new Promise((resolve, reject) => {
+      setTimeout(() => {
+        resolve({
+          'cloudwatch-2019.10.28': {
+            mappings: {
+              properties: {
+                '@timestamp': {
+                  type: 'date',
+                },
+                CPUUtilization: {
+                  type: 'double',
+                },
+                DiskReadBytes: {
+                  type: 'double',
+                },
+                DiskReadOps: {
+                  type: 'double',
+                },
+                DiskWriteBytes: {
+                  type: 'double',
+                },
+                DiskWriteOps: {
+                  type: 'double',
+                },
+                NetworkIn: {
+                  type: 'double',
+                },
+                NetworkOut: {
+                  type: 'double',
+                },
+                instance: {
+                  type: 'keyword',
+                },
+                region: {
+                  type: 'keyword',
+                },
+                sourcetype: {
+                  type: 'text',
+                  fields: {
+                    keyword: {
+                      type: 'keyword',
+                      ignore_above: 256,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+      }, 2000);
+    });
+  }
+
+  getMappings = async (
+    indices: string | string[],
+    types?: string | string[],
+    callback: Function
+  ) => {
     // get fields for indices and types. Both can be a list, a string or null (meaning all).
     let ret: Field[] = [];
     indices = expandAliases(indices);
 
     if (typeof indices === 'string') {
+      console.log(this.perIndexTypes, '___this.perIndexTypes___');
+
       const typeDict = this.perIndexTypes[indices] as Record<string, unknown>;
       if (!typeDict) {
+        try {
+          // TODO indicate the mapping fetching is in progress
+          const mapping = await this.fetchMappings(indices);
+          this.loadMappings(mapping);
+        } catch (e) {
+          console.log(e, '___e___');
+        }
+
         return [];
       }
 
@@ -106,6 +189,7 @@ export class Mapping implements BaseMapping {
       }
     } else {
       // multi index mode.
+      // TODO update multi index mode
       Object.keys(this.perIndexTypes).forEach((index) => {
         if (!indices || indices.length === 0 || indices.includes(index)) {
           ret.push(this.getMappings(index, types) as unknown as Field);
@@ -121,6 +205,8 @@ export class Mapping implements BaseMapping {
   };
 
   loadMappings = (mappings: IndicesGetMappingResponse) => {
+    console.log(mappings, '___mappings___');
+
     this.perIndexTypes = {};
 
     Object.entries(mappings).forEach(([index, indexMapping]) => {
