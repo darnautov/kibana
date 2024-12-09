@@ -10,12 +10,11 @@ import type { PresentationContainer } from '@kbn/presentation-containers';
 import { tracksOverlays } from '@kbn/presentation-containers';
 import { toMountPoint } from '@kbn/react-kibana-mount';
 import React from 'react';
-import { i18n } from '@kbn/i18n';
-import { EuiButton, EuiFlexGroup, EuiFlexItem } from '@elastic/eui';
-import { FormattedMessage } from '@kbn/i18n-react';
 import { AiopsAppContext } from '../../hooks/use_aiops_app_context';
 import type { AiopsPluginStartDeps } from '../../types';
+import { CorrelationsFinderService } from './correlations_finder_service';
 import { CorrelationsFlyout } from './correlations_flyout';
+import { showToast } from './toast_component';
 
 export async function startCorrelationsAnalysis(
   coreStart: CoreStart,
@@ -30,34 +29,15 @@ export async function startCorrelationsAnalysis(
   const overlayTracker = tracksOverlays(parentApi) ? parentApi : undefined;
 
   // Instantiate a service and start the correlations analysis
+  const correlationsFinderService = new CorrelationsFinderService();
 
   // Immediately show an info toast to inform the user that correlations results are loading
-  coreStart.notifications.toasts.addInfo({
-    title: i18n.translate('xpack.aiops.correlations.toastTitle', {
-      defaultMessage: 'Detecting changes and correlations...',
-    }),
-    iconType: 'changePointDetection',
-    toastLifeTimeMs: 30000,
-    text: toMountPoint(
-      <EuiFlexGroup justifyContent="flexEnd">
-        <EuiFlexItem grow={false}>
-          <EuiButton
-            color="success"
-            data-test-subj="aiopsStartCorrelationsAnalysisShowResultsButton"
-          >
-            <FormattedMessage
-              id="xpack.aiops.correlations.toast.showResultsButtonLabel"
-              defaultMessage="See results"
-            />
-          </EuiButton>
-        </EuiFlexItem>
-      </EuiFlexGroup>,
-      coreStart
-    ),
-    onClose: () => {
-      // TODO cancel the request
-    },
-  });
+  const showResults = await showToast(coreStart, correlationsFinderService);
+
+  if (!showResults) {
+    correlationsFinderService.destroy();
+    return;
+  }
 
   return new Promise(async (resolve, reject) => {
     try {
