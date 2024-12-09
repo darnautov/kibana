@@ -29,7 +29,7 @@ export async function startCorrelationsAnalysis(
   const overlayTracker = tracksOverlays(parentApi) ? parentApi : undefined;
 
   // Instantiate a service and start the correlations analysis
-  const correlationsFinderService = new CorrelationsFinderService();
+  const correlationsFinderService = new CorrelationsFinderService(coreStart.http);
 
   // Immediately show an info toast to inform the user that correlations results are loading
   const showResults = await showToast(coreStart, correlationsFinderService);
