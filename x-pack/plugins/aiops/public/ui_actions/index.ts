@@ -19,6 +19,7 @@ import type { AiopsPluginStartDeps } from '../types';
 import { createCategorizeFieldAction } from '../components/log_categorization/categorize_field_actions';
 import { createAddPatternAnalysisEmbeddableAction } from './create_pattern_analysis_action';
 import { createAddLogRateAnalysisEmbeddableAction } from './create_log_rate_analysis_actions';
+import { createFindCorrelationsAction } from './correlations';
 
 export function registerAiopsUiActions(
   uiActions: UiActionsSetup,
@@ -29,6 +30,9 @@ export function registerAiopsUiActions(
   const addChangePointChartAction = createAddChangePointChartAction(coreStart, pluginStart);
   const addPatternAnalysisAction = createAddPatternAnalysisEmbeddableAction(coreStart, pluginStart);
   const addLogRateAnalysisAction = createAddLogRateAnalysisEmbeddableAction(coreStart, pluginStart);
+
+  // Correlations
+  const findCorrelationsActions = createFindCorrelationsAction(coreStart, pluginStart);
 
   uiActions.addTriggerAction(ADD_PANEL_TRIGGER, addPatternAnalysisAction);
   uiActions.addTriggerAction(ADD_PANEL_TRIGGER, addChangePointChartAction);
@@ -41,6 +45,7 @@ export function registerAiopsUiActions(
   );
 
   uiActions.addTriggerAction(CONTEXT_MENU_TRIGGER, openChangePointInMlAppAction);
+  uiActions.addTriggerAction(CONTEXT_MENU_TRIGGER, findCorrelationsActions);
 
   uiActions.addTriggerAction(ADD_PANEL_TRIGGER, addLogRateAnalysisAction);
 }
