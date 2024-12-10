@@ -7,6 +7,7 @@
 
 import type { CoreStart } from '@kbn/core/public';
 import { i18n } from '@kbn/i18n';
+import type { LensApi } from '@kbn/lens-plugin/public';
 import { isLensApi } from '@kbn/lens-plugin/public';
 import { apiIsPresentationContainer } from '@kbn/presentation-containers';
 import type { EmbeddableApiContext } from '@kbn/presentation-publishing';
@@ -16,6 +17,16 @@ import type { AiopsPluginStartDeps } from '../../types';
 // import { IncompatibleActionError } from '@kbn/ui-actions-plugin/public';
 
 export const FIND_CORRELATIONS_CONTEXT_MENU_ACTION = 'findCorrelationsContextMenuAction';
+
+export type LensApiOnDashboard = LensApi;
+
+function isCompatibleEmbeddable(embeddable: unknown): embeddable is LensApi {
+  return (
+    isLensApi(embeddable) &&
+    apiHasParentApi(embeddable) &&
+    apiIsPresentationContainer(embeddable.parentApi)
+  );
+}
 
 export function createFindCorrelationsAction(
   coreStart: CoreStart,
@@ -35,13 +46,16 @@ export function createFindCorrelationsAction(
       }),
     async execute(context) {
       try {
+        if (!isCompatibleEmbeddable(context.embeddable)) {
+          return;
+        }
+
         const { startCorrelationsAnalysis } = await import('./start_correlations_analysis');
 
         const correlationPanels = await startCorrelationsAnalysis(
           coreStart,
           pluginStart,
-          context.embeddable,
-          context.embeddable.uuid
+          context.embeddable
         );
 
         // TODO Add panels to the active dashboard based on the results
@@ -55,12 +69,7 @@ export function createFindCorrelationsAction(
     },
     async isCompatible(context) {
       const { embeddable } = context;
-
-      return (
-        isLensApi(embeddable) &&
-        apiHasParentApi(embeddable) &&
-        apiIsPresentationContainer(embeddable.parentApi)
-      );
+      return isCompatibleEmbeddable(embeddable);
     },
   };
 }

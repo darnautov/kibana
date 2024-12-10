@@ -6,7 +6,7 @@
  */
 
 import type { CoreStart } from '@kbn/core/public';
-import type { PresentationContainer } from '@kbn/presentation-containers';
+import type { LensApi } from '@kbn/lens-plugin/public';
 import { tracksOverlays } from '@kbn/presentation-containers';
 import { toMountPoint } from '@kbn/react-kibana-mount';
 import React from 'react';
@@ -19,17 +19,19 @@ import { showToast } from './toast_component';
 export async function startCorrelationsAnalysis(
   coreStart: CoreStart,
   pluginStart: AiopsPluginStartDeps,
-  parentApi: PresentationContainer,
-  focusedPanelId: string,
+  lenEmbeddable: LensApi,
   // TODO add support for click and brush input
   input?: any
 ): Promise<any> {
   const { overlays } = coreStart;
 
+  const { parentApi } = lenEmbeddable;
+
   const overlayTracker = tracksOverlays(parentApi) ? parentApi : undefined;
 
   // Instantiate a service and start the correlations analysis
   const correlationsFinderService = new CorrelationsFinderService(coreStart.http);
+  correlationsFinderService.findCorrelations(lenEmbeddable);
 
   // Immediately show an info toast to inform the user that correlations results are loading
   const showResults = await showToast(coreStart, correlationsFinderService);
