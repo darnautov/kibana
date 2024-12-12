@@ -7,9 +7,15 @@
 
 import { EuiFlyoutBody, EuiFlyoutHeader, EuiTitle } from '@elastic/eui';
 import { FormattedMessage } from '@kbn/i18n-react';
-import React from 'react';
+import React, { type PropsWithChildren, type FC } from 'react';
+import useObservable from 'react-use/lib/useObservable';
+import type { CorrelationsFinderService } from './correlations_finder_service';
 
-export const CorrelationsFlyout = () => {
+export const CorrelationsFlyout: FC<PropsWithChildren<{ service: CorrelationsFinderService }>> = ({
+  service,
+}) => {
+  const results = useObservable(service.results$, []);
+
   return (
     <>
       <EuiFlyoutHeader>
@@ -24,7 +30,11 @@ export const CorrelationsFlyout = () => {
       </EuiFlyoutHeader>
 
       <EuiFlyoutBody>
-        <div />
+        <div>
+          {results.map((result, index) => {
+            return <>{result.id}</>;
+          })}
+        </div>
       </EuiFlyoutBody>
     </>
   );

@@ -5,7 +5,7 @@
  * 2.0.
  */
 
-import { EuiButton, EuiFlexGroup, EuiFlexItem, EuiProgress } from '@elastic/eui';
+import { EuiButton, EuiFlexGroup, EuiFlexItem, EuiProgress, EuiSpacer } from '@elastic/eui';
 import type { CoreStart } from '@kbn/core/public';
 import { i18n } from '@kbn/i18n';
 import { FormattedMessage } from '@kbn/i18n-react';
@@ -31,7 +31,10 @@ export async function showToast(
         text: toMountPoint(
           <ToastComponent
             isLoading$={correlationsFinderService.isLoading$}
-            onShowResultsClick={resolve.bind(null, true)}
+            onShowResultsClick={() => {
+              coreStart.notifications.toasts.remove(toastInstance.id);
+              resolve(true);
+            }}
           />,
           coreStart
         ),
@@ -52,24 +55,22 @@ export const ToastComponent: FC<
   const isLoading = useObservable(isLoading$, true);
   return (
     <div>
-      {isLoading ? (
-        <EuiProgress size="xs" color="accent" />
-      ) : (
-        <EuiFlexGroup justifyContent="flexEnd">
-          <EuiFlexItem grow={false}>
-            <EuiButton
-              color="success"
-              data-test-subj="aiopsStartCorrelationsAnalysisShowResultsButton"
-              onAbort={onShowResultsClick}
-            >
-              <FormattedMessage
-                id="xpack.aiops.correlations.toast.showResultsButtonLabel"
-                defaultMessage="See results"
-              />
-            </EuiButton>
-          </EuiFlexItem>
-        </EuiFlexGroup>
-      )}
+      {isLoading ? <EuiProgress size="xs" color="accent" /> : null}
+      <EuiSpacer size="s" />
+      <EuiFlexGroup justifyContent="flexEnd">
+        <EuiFlexItem grow={false}>
+          <EuiButton
+            color="success"
+            data-test-subj="aiopsStartCorrelationsAnalysisShowResultsButton"
+            onClick={onShowResultsClick}
+          >
+            <FormattedMessage
+              id="xpack.aiops.correlations.toast.showResultsButtonLabel"
+              defaultMessage="See results"
+            />
+          </EuiButton>
+        </EuiFlexItem>
+      </EuiFlexGroup>
     </div>
   );
 };

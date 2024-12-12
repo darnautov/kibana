@@ -6,15 +6,15 @@
  */
 
 import type { CoreStart } from '@kbn/core/public';
+import type { ChartActionContext } from '@kbn/embeddable-plugin/public';
 import { i18n } from '@kbn/i18n';
 import type { LensApi } from '@kbn/lens-plugin/public';
 import { isLensApi } from '@kbn/lens-plugin/public';
 import { apiIsPresentationContainer } from '@kbn/presentation-containers';
-import type { EmbeddableApiContext } from '@kbn/presentation-publishing';
 import { apiHasParentApi } from '@kbn/presentation-publishing';
 import type { UiActionsActionDefinition } from '@kbn/ui-actions-plugin/public';
+import type { ActionDefinitionContext } from '@kbn/ui-actions-plugin/public/actions';
 import type { AiopsPluginStartDeps } from '../../types';
-// import { IncompatibleActionError } from '@kbn/ui-actions-plugin/public';
 
 export const FIND_CORRELATIONS_CONTEXT_MENU_ACTION = 'findCorrelationsContextMenuAction';
 
@@ -28,16 +28,20 @@ function isCompatibleEmbeddable(embeddable: unknown): embeddable is LensApi {
   );
 }
 
+export type FindCorrelationsActionContext = ActionDefinitionContext<
+  ChartActionContext & { embeddable: LensApi & Required<Pick<LensApi, 'parentApi'>> }
+>;
+
 export function createFindCorrelationsAction(
   coreStart: CoreStart,
   pluginStart: AiopsPluginStartDeps
-): UiActionsActionDefinition<EmbeddableApiContext> {
+): UiActionsActionDefinition<FindCorrelationsActionContext> {
   return {
     id: 'find-correlations-action',
     type: FIND_CORRELATIONS_CONTEXT_MENU_ACTION,
     order: 8,
     grouping: [{ id: 'ml', order: 2 }],
-    getIconType(context): string {
+    getIconType(): string {
       return 'changePointDetection';
     },
     getDisplayName: () =>
@@ -52,17 +56,7 @@ export function createFindCorrelationsAction(
 
         const { startCorrelationsAnalysis } = await import('./start_correlations_analysis');
 
-        const correlationPanels = await startCorrelationsAnalysis(
-          coreStart,
-          pluginStart,
-          context.embeddable
-        );
-
-        // TODO Add panels to the active dashboard based on the results
-        // presentationContainerParent.addNewPanel({
-        //   panelType: EMBEDDABLE_CHANGE_POINT_CHART_TYPE,
-        //   initialState,
-        // });
+        await startCorrelationsAnalysis(coreStart, pluginStart, context);
       } catch (e) {
         return Promise.reject();
       }

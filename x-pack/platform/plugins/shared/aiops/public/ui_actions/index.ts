@@ -6,7 +6,11 @@
  */
 
 import { type UiActionsSetup, ADD_PANEL_TRIGGER } from '@kbn/ui-actions-plugin/public';
-import { CONTEXT_MENU_TRIGGER } from '@kbn/embeddable-plugin/public';
+import {
+  CONTEXT_MENU_TRIGGER,
+  SELECT_RANGE_TRIGGER,
+  VALUE_CLICK_TRIGGER,
+} from '@kbn/embeddable-plugin/public';
 import {
   categorizeFieldTrigger,
   CATEGORIZE_FIELD_TRIGGER,
@@ -33,6 +37,9 @@ export function registerAiopsUiActions(
 
   // Correlations
   const findCorrelationsActions = createFindCorrelationsAction(coreStart, pluginStart);
+  uiActions.addTriggerAction(CONTEXT_MENU_TRIGGER, findCorrelationsActions);
+  uiActions.addTriggerAction(VALUE_CLICK_TRIGGER, findCorrelationsActions);
+  uiActions.addTriggerAction(SELECT_RANGE_TRIGGER, findCorrelationsActions);
 
   uiActions.addTriggerAction(ADD_PANEL_TRIGGER, addPatternAnalysisAction);
   uiActions.addTriggerAction(ADD_PANEL_TRIGGER, addChangePointChartAction);
@@ -45,7 +52,6 @@ export function registerAiopsUiActions(
   );
 
   uiActions.addTriggerAction(CONTEXT_MENU_TRIGGER, openChangePointInMlAppAction);
-  uiActions.addTriggerAction(CONTEXT_MENU_TRIGGER, findCorrelationsActions);
 
   uiActions.addTriggerAction(ADD_PANEL_TRIGGER, addLogRateAnalysisAction);
 }

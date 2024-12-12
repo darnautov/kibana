@@ -6,7 +6,6 @@
  */
 
 import type { CoreStart } from '@kbn/core/public';
-import type { LensApi } from '@kbn/lens-plugin/public';
 import { tracksOverlays } from '@kbn/presentation-containers';
 import { toMountPoint } from '@kbn/react-kibana-mount';
 import React from 'react';
@@ -14,24 +13,25 @@ import { AiopsAppContext } from '../../hooks/use_aiops_app_context';
 import type { AiopsPluginStartDeps } from '../../types';
 import { CorrelationsFinderService } from './correlations_finder_service';
 import { CorrelationsFlyout } from './correlations_flyout';
+import type { FindCorrelationsActionContext } from './create_find_correlations_action';
 import { showToast } from './toast_component';
 
 export async function startCorrelationsAnalysis(
   coreStart: CoreStart,
   pluginStart: AiopsPluginStartDeps,
-  lenEmbeddable: LensApi,
-  // TODO add support for click and brush input
-  input?: any
+  actionContext: FindCorrelationsActionContext
 ): Promise<any> {
   const { overlays } = coreStart;
 
-  const { parentApi } = lenEmbeddable;
+  const { embeddable: lensEmbeddable } = actionContext;
+
+  const { parentApi } = lensEmbeddable;
 
   const overlayTracker = tracksOverlays(parentApi) ? parentApi : undefined;
 
   // Instantiate a service and start the correlations analysis
   const correlationsFinderService = new CorrelationsFinderService(coreStart.http);
-  correlationsFinderService.findCorrelations(lenEmbeddable);
+  correlationsFinderService.findCorrelations(actionContext);
 
   // Immediately show an info toast to inform the user that correlations results are loading
   const showResults = await showToast(coreStart, correlationsFinderService);
@@ -53,7 +53,7 @@ export async function startCorrelationsAnalysis(
             }}
           >
             <CorrelationsFlyout
-              userInput={input}
+              service={correlationsFinderService}
               onSave={(update) => {
                 resolve(update);
                 flyoutSession.close();
@@ -70,7 +70,7 @@ export async function startCorrelationsAnalysis(
         ),
         {
           ownFocus: true,
-          size: 'xl',
+          size: 's',
           type: 'push',
           'data-test-subj': 'aiopsCorrelationsFlyout',
           'aria-labelledby': 'correlationsFlyout',
