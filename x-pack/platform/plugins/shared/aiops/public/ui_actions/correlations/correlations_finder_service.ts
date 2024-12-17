@@ -12,25 +12,34 @@ import {
   isRangeSelectTriggerContext,
   isValueClickTriggerContext,
 } from '@kbn/embeddable-plugin/public';
-import type { LensApi } from '@kbn/lens-plugin/public';
+import type { FormBasedPersistedState, LensApi } from '@kbn/lens-plugin/public';
 import { lensActions } from '@kbn/lens-plugin/public/state_management/lens_slice';
 import { httpResponseIntoObservable } from '@kbn/sse-utils-client';
 import type { Observable } from 'rxjs';
 import { BehaviorSubject, Subscription, from } from 'rxjs';
 import { lastValueFrom, firstValueFrom } from 'rxjs';
-import { getIndexPatternFromESQLQuery } from '@kbn/esql-utils';
-import type { FindCorrelationsActionContext } from './create_find_correlations_action';
-
-export interface CorrelationResult {
-  id: string;
-  entityType: string;
-  score: number;
-}
+import { getIndexPatternFromESQLQuery, getTimeFieldFromESQLQuery } from '@kbn/esql-utils';
+import type { TimeRange } from '@kbn/es-query';
+import { isOfAggregateQueryType } from '@kbn/es-query';
+import type { LensDocument } from '@kbn/lens-plugin/public/persistence';
+import {
+  isCompatibleEmbeddable,
+  type FindCorrelationsActionContext,
+} from './create_find_correlations_action';
+import type {
+  AiopsCorrelationsRequestBody,
+  CorrelationResult,
+} from '../../../common/types/correlations';
 
 export interface TargetMetric {
   dataViewId: string;
+  indexPattern: string;
   metricField: string;
+  /** Function applied to the metric field */
+  operationType: string;
+  splitField?: string;
   timeField: string;
+  timeRange: TimeRange;
 }
 
 export interface BodyPayload {
@@ -44,8 +53,6 @@ export interface BodyPayload {
   context: TargetMetric[];
   /** User selected time range */
   timeSlice?: number[];
-  /** Time range of the target metric */
-  timeRange: number[];
 }
 
 export class CorrelationsFinderService {
@@ -55,18 +62,14 @@ export class CorrelationsFinderService {
 
   constructor(private readonly http: HttpStart) {}
 
-  public findCorrelations(context: FindCorrelationsActionContext): void {
-    const timestamp = this.getUserTimeInput(context);
-
-    console.log(timestamp, '______timestamp______');
-
+  public async findCorrelations(context: FindCorrelationsActionContext): Promise<void> {
     const targetVis = this.extractLensVis(context.embeddable);
-    const visContext = this.extractVisContext(context.embeddable);
+    const visContext = await this.extractVisContext(context.embeddable);
 
-    const body: BodyPayload = {
-      target: targetVis,
+    const body: AiopsCorrelationsRequestBody = {
+      targetMetric: targetVis,
       context: visContext,
-      timeRange: [0, 0],
+      timeSlice: this.getUserTimeInput(context),
     };
 
     console.log(body, '______body______');
@@ -74,7 +77,7 @@ export class CorrelationsFinderService {
     this._subscription$.add(
       from(
         this.http.post(AIOPS_API_ENDPOINT.CORRELATIONS, {
-          body,
+          body: JSON.stringify(body),
           asResponse: true,
           rawResponse: true,
           version: '1',
@@ -83,6 +86,10 @@ export class CorrelationsFinderService {
         .pipe(httpResponseIntoObservable())
         .subscribe((v) => {
           console.log(v, '______v______');
+          if (v.type === 'correlation') {
+            console.log('___RESUILT ADD');
+            this._results$.next([...this._results$.value, v.data]);
+          }
         })
     );
   }
@@ -98,46 +105,84 @@ export class CorrelationsFinderService {
     }
   }
 
+  /**
+   * Extract fields from the Lens embeddable.
+   * Supports both Lens and ES|QL embeddables.
+   */
   private extractLensVis(lensEmbeddable: LensApi): TargetMetric {
     const dataArgs = lensEmbeddable.getViewUnderlyingDataArgs();
 
-    if (!dataArgs) {
-      throw new Error('No data args found');
-    }
+    // debugger;
 
-    const esqlQuery = dataArgs.query.esql;
+    // const savedVis = lensEmbeddable.getSavedVis();
 
-    if (esqlQuery) {
-      const indexPattern = getIndexPatternFromESQLQuery(esqlQuery);
-      console.log(indexPattern, '______indexPattern______');
-    }
+    // savedVis.
 
-    return {
-      dataViewId: dataArgs.dataViewSpec.id!,
-      metricField: dataArgs.columns[1],
-      timeField: dataArgs.columns[0],
-    };
-  }
-
-  private extractEsqlVis(lensEmbeddable: LensApi): TargetMetric {
-    const dataArgs = lensEmbeddable.getViewUnderlyingDataArgs();
+    // attributes?.state.datasourceStates.;
 
     if (!dataArgs) {
       throw new Error('No data args found');
     }
 
-    const esqlQuery = dataArgs.query.esql;
+    console.log(dataArgs, '______dataArgs______');
 
-    if (esqlQuery) {
+    let targetMetric: TargetMetric;
+
+    if (isOfAggregateQueryType(dataArgs.query)) {
+      const { esql: esqlQuery } = dataArgs.query;
       const indexPattern = getIndexPatternFromESQLQuery(esqlQuery);
-      console.log(indexPattern, '______indexPattern______');
+      targetMetric = {
+        indexPattern,
+        metricField: '',
+        timeField: getTimeFieldFromESQLQuery(esqlQuery),
+      };
+    } else {
+      // Need to get full attributes to resolve fields
+      const attributes = lensEmbeddable.getFullAttributes();
+
+      const formBasedLayers = (
+        (attributes as LensDocument).state.datasourceStates?.formBased as FormBasedPersistedState
+      ).layers;
+
+      if (!formBasedLayers) {
+        throw new Error('No form based layers found');
+      }
+
+      let metricField: string;
+      let splitField: string;
+      let operationType: string;
+      let timeField: string;
+
+      Object.values(formBasedLayers).forEach((layer) => {
+        const { columnOrder, columns } = layer;
+        Object.values(columns).forEach((column) => {
+          if (column.dataType === 'date') {
+            // time field
+            timeField = column.sourceField!;
+          } else if (column.dataType === 'number') {
+            // metric field
+            metricField = column.sourceField!;
+            operationType = column.operationType;
+          } else if (column.isBucketed && column.dataType === 'string') {
+            // group by field
+            splitField = column.sourceField!;
+          }
+        });
+      });
+
+      // normal lens embeddable
+      targetMetric = {
+        dataViewId: dataArgs.dataViewSpec.id!,
+        indexPattern: dataArgs.dataViewSpec.title!,
+        metricField,
+        operationType,
+        splitField,
+        timeField,
+        timeRange: dataArgs.timeRange,
+      };
     }
 
-    return {
-      dataViewId: dataArgs.dataViewSpec.id!,
-      metricField: dataArgs.columns[1],
-      timeField: dataArgs.columns[0],
-    };
+    return targetMetric;
   }
 
   private async extractVisContext(
@@ -145,9 +190,8 @@ export class CorrelationsFinderService {
   ): Promise<TargetMetric[]> {
     const children = await firstValueFrom(lensEmbeddable.parentApi.children$);
     return Object.values(children)
-      .filter((panel) => {
-        // TODO filter dashboard panels
-        return true;
+      .filter((panel): panel is LensApi => {
+        return isCompatibleEmbeddable(panel) && panel !== lensEmbeddable;
       })
       .map((panel) => this.extractLensVis(panel));
   }

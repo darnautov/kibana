@@ -5,24 +5,41 @@
  * 2.0.
  */
 
-import type {
-  CoreStart,
-  IRouter,
-  KibanaRequest,
-  KibanaResponseFactory,
-  RequestHandlerContext,
-} from '@kbn/core/server';
-import type { DataRequestHandlerContext } from '@kbn/data-plugin/server';
-import type { UsageCounter } from '@kbn/usage-collection-plugin/server';
-import { aiopsLogRateAnalysisSchemaV3 } from '@kbn/aiops-log-rate-analysis/api/schema_v3';
 import { AIOPS_API_ENDPOINT } from '@kbn/aiops-common/constants';
+import type { TypeOf } from '@kbn/config-schema';
+import { schema } from '@kbn/config-schema';
+import type { CoreStart, IRouter, Logger } from '@kbn/core/server';
+import type { DataRequestHandlerContext } from '@kbn/data-plugin/server';
 import { observableIntoEventSourceStream } from '@kbn/sse-utils-server';
-import { of } from 'rxjs';
+import type { UsageCounter } from '@kbn/usage-collection-plugin/server';
 import type { AiopsLicense } from '../../types';
+import { CorrelationsFinder } from './correlations_finder';
+
+export const aiopsCorrelationMetricsSchema = schema.object({
+  dataViewId: schema.string(),
+  indexPattern: schema.string(),
+  metricField: schema.string(),
+  operationType: schema.string(),
+  splitField: schema.maybe(schema.string()),
+  timeField: schema.string(),
+  timeRange: schema.object({
+    from: schema.string(),
+    to: schema.string(),
+  }),
+});
+
+export const aiopsCorrelationsRequestSchema = schema.object({
+  targetMetric: aiopsCorrelationMetricsSchema,
+  context: schema.arrayOf(aiopsCorrelationMetricsSchema),
+  timeSlice: schema.maybe(schema.arrayOf(schema.number())),
+});
+
+export type AiopsCorrelationsRequestBody = TypeOf<typeof aiopsCorrelationsRequestSchema>;
 
 export const defineRoute = (
   router: IRouter<DataRequestHandlerContext>,
   license: AiopsLicense,
+  logger: Logger,
   coreStart: CoreStart,
   usageCounter?: UsageCounter
 ) => {
@@ -41,26 +58,29 @@ export const defineRoute = (
               'This route is opted out from authorization because permissions will be checked by elasticsearch',
           },
         },
-        validate: false,
-        // validate: {
-        //   request: {
-        //     body: aiopsLogRateAnalysisSchemaV3,
-        //   },
-        // },
+        validate: {
+          request: {
+            body: aiopsCorrelationsRequestSchema,
+          },
+        },
       },
-      async (
-        context: RequestHandlerContext,
-        request: KibanaRequest,
-        response: KibanaResponseFactory
-      ) => {
+      async (context, request, response) => {
+        const correlationsFinder = new CorrelationsFinder(
+          (await context.core).elasticsearch.client
+        );
+
+        const controller = new AbortController();
+        request.events.aborted$.subscribe(() => {
+          controller.abort();
+        });
+
         return response.ok({
           body: observableIntoEventSourceStream(
-            of({
-              type: 'my_event_type',
-              data: {
-                anyData: {},
-              },
-            })
+            correlationsFinder.getResultsObservable$(request.body),
+            {
+              logger,
+              signal: controller.signal,
+            }
           ),
         });
       }

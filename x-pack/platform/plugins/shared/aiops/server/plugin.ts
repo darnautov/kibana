@@ -68,7 +68,7 @@ export class AiopsPlugin
       defineLogRateAnalysisFieldCandidatesRoute(router, aiopsLicense, coreStart, this.usageCounter);
       defineLogRateAnalysisRoute(router, aiopsLicense, this.logger, coreStart, this.usageCounter);
       defineCategorizationFieldValidationRoute(router, aiopsLicense, this.usageCounter);
-      defineCorrelationsRoute(router, aiopsLicense, coreStart, this.usageCounter);
+      defineCorrelationsRoute(router, aiopsLicense, this.logger, coreStart, this.usageCounter);
     });
 
     return {};

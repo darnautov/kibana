@@ -20,7 +20,7 @@ export const FIND_CORRELATIONS_CONTEXT_MENU_ACTION = 'findCorrelationsContextMen
 
 export type LensApiOnDashboard = LensApi;
 
-function isCompatibleEmbeddable(embeddable: unknown): embeddable is LensApi {
+export function isCompatibleEmbeddable(embeddable: unknown): embeddable is LensApi {
   return (
     isLensApi(embeddable) &&
     apiHasParentApi(embeddable) &&

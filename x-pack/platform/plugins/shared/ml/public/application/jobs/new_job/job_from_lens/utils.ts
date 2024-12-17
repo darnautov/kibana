@@ -110,6 +110,7 @@ export async function getJobsItemsFromEmbeddable(embeddable: LensApi, lens?: Len
   };
 }
 
+// TODO move to the package?
 export function lensOperationToMlFunction(operationType: string) {
   switch (operationType) {
     case 'average':
