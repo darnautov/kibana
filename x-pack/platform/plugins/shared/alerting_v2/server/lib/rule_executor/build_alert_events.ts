@@ -103,7 +103,7 @@ export function buildAlertEventsFromEsqlResponse({
       status: 'breached',
       source,
       type: 'signal', // Initial events are signals; they become alerts after episode processing
-      // TODO: episode_id, episode_status, episode_status_count are populated during episode processing
+      // TODO: episode object (id, status, status_count) is populated during episode processing
     };
 
     return { id: alertUuid, doc };
