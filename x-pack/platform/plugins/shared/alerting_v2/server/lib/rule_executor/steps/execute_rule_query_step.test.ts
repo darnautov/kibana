@@ -9,7 +9,7 @@ import type { DiagnosticResult } from '@elastic/elasticsearch';
 import { errors } from '@elastic/elasticsearch';
 import { TaskErrorSource } from '@kbn/task-manager-plugin/server';
 import { getErrorSource } from '@kbn/task-manager-plugin/server/task_running';
-import type { PluginInitializerContext } from '@kbn/core/server';
+import { coreMock } from '@kbn/core/server/mocks';
 import { ExecuteRuleQueryStep } from './execute_rule_query_step';
 import {
   collectStreamResults,
@@ -29,10 +29,8 @@ import type { PluginConfig } from '../../../config';
 
 const DEFAULT_MAX_ALERTS_PER_RUN = 10000;
 
-const createPluginConfigAccessor = (
-  maxAlertsPerRun = DEFAULT_MAX_ALERTS_PER_RUN
-): PluginInitializerContext<PluginConfig>['config'] => {
-  const config = {
+const createPluginConfigAccessor = (maxAlertsPerRun = DEFAULT_MAX_ALERTS_PER_RUN) => {
+  const config: PluginConfig = {
     enabled: true,
     invalidateApiKeysTask: { interval: '5m', removalDelay: '1h' },
     rules: {
@@ -40,9 +38,9 @@ const createPluginConfigAccessor = (
       maxScheduledPerMinute: 400,
       run: { alerts: { max: maxAlertsPerRun } },
     },
-  } as PluginConfig;
+  };
 
-  return { get: () => config } as unknown as PluginInitializerContext<PluginConfig>['config'];
+  return coreMock.createPluginInitializerContext<PluginConfig>(config).config;
 };
 
 describe('ExecuteRuleQueryStep', () => {

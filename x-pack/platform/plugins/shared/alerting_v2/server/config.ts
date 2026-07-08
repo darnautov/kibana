@@ -23,13 +23,7 @@ const MINIMUM_SCHEDULE_INTERVAL_FLOOR = MIN_SCHEDULE_INTERVAL;
 /** Highest value `xpack.alerting_v2.rules.minimumScheduleInterval` may be set to. */
 const MAX_MINIMUM_SCHEDULE_INTERVAL = '30d';
 
-/**
- * Default and highest value of `xpack.alerting_v2.rules.run.alerts.max`.
- * Unconditionally applied as an ES|QL `LIMIT` clause on every breach query so a
- * single execution can't pull an unbounded result set into memory (the Arrow
- * IPC reader materializes the full response before streaming batches, so an
- * unbounded query can exceed Node's ~1GiB buffer ceiling and crash the task).
- */
+/** Default and highest value of `xpack.alerting_v2.rules.run.alerts.max`. */
 const MAX_ALERTS_PER_RUN = 10000;
 
 const rulesRunSchema = schema.object({

@@ -141,7 +141,7 @@ Top-level strategy fields (sit alongside `query` on the rule, not inside it):
 | Schedule | Per rule | [`schedule.ts`](schedule.ts) |
 | Max alerts per run | `xpack.alerting_v2.rules.run.alerts.max`, default and ceiling `10000` | [`config.ts`](../../config.ts) |
 
-`ExecuteRuleQueryStep` unconditionally appends `\| LIMIT <max>` to the breach query before execution. ES|QL takes the min across multiple `LIMIT` commands, so an author-supplied smaller limit still wins — this only ever tightens the cap. Without it, an unbounded result set is fully materialized by the Arrow IPC reader before any batch is streamed, which can exceed Node's ~1GiB buffer ceiling and crash the task.
+`ExecuteRuleQueryStep` unconditionally appends `\| LIMIT <max>` to the breach query before execution. ES|QL takes the min across multiple `LIMIT` commands, so an author-supplied smaller limit still wins.
 
 ## Pipeline state
 

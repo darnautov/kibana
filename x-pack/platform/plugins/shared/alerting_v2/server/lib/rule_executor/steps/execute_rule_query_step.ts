@@ -55,10 +55,6 @@ export class ExecuteRuleQueryStep implements RuleExecutionStep {
         lookbackWindow,
       });
 
-      // Applied unconditionally, regardless of any author-supplied LIMIT: ES|QL
-      // takes the min across multiple LIMIT commands, so this only ever tightens
-      // the cap. Without it, an unbounded result set is fully materialized by the
-      // Arrow IPC reader before any batch is streamed, which can OOM the task.
       const boundedQuery = appendLimitToQuery(effectiveQuery, step.maxAlertsPerRun);
 
       step.logger.debug({
