@@ -1,0 +1,37 @@
+schema: spec-driven
+
+# Kibana is a monorepo. OpenSpec lives at the repo root; every capability is
+# namespaced by the owning module so several plugins can share this tree.
+context: |
+  Kibana monorepo. Specs are namespaced by plugin: capability paths are
+  `<plugin>/<capability>` (for example `task_manager/capacity`) and change
+  names are prefixed with the plugin's short name (`tm-` for Task Manager).
+  Task Manager lives in x-pack/platform/plugins/shared/task_manager and is
+  owned by the ResponseOps team. Behaviour changes must be flag-guarded with a
+  plain-config kill switch, leave the default path byte-identical, and come
+  with unit tests (`node scripts/jest <path>`) and a scoped type check
+  (`node scripts/type_check --project <plugin>/tsconfig.json`).
+  Reference issues and PRs by full URL, never by bare number. Never link
+  private repositories from files committed to Kibana.
+
+rules:
+  proposal:
+    - State what is out of scope and the kill switch for any behaviour change
+    - Name the measurement that proves the change (benchmark, test, metric)
+  specs:
+    - Requirements use SHALL and describe observable behaviour, not code structure
+    - Every requirement has at least one scenario with WHEN and THEN
+  design:
+    - Record alternatives that were rejected and why
+    - Call out observability (health endpoint, logs, OTel) for any runtime behaviour
+  tasks:
+    - Each task names the files it touches and how it is verified
+
+operations:
+  apply:
+    guidance:
+      - Run the plugin's scoped type check and the touched jest suites before marking a task done
+      - Do not commit or push; the developer reviews and commits
+  archive:
+    guidance:
+      - Summarise which specs changed and link the merged pull request
