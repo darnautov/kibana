@@ -18,8 +18,19 @@ import { claimAvailableTasksMget } from './strategy_mget';
 import { CLAIM_STRATEGY_MGET } from '../config';
 import type { TaskPartitioner } from '../lib/task_partitioner';
 
+/**
+ * Heap budget for one claim cycle: tasks are admitted while the sum of their
+ * estimated heap stays within `budgetBytes`.
+ */
+export interface ClaimMemoryGate {
+  budgetBytes: number;
+  estimateBytes: (taskId: string, taskType: string, cost: number) => number;
+}
+
 export interface TaskClaimerOpts {
   getCapacity: (taskType?: string | undefined) => number;
+  /** Present with adaptive capacity; absent means no heap accounting during the claim. */
+  getMemoryGate?: () => ClaimMemoryGate | undefined;
   claimOwnershipUntil: Date;
   batches: TaskClaimingBatches;
   events$: Subject<TaskClaim>;

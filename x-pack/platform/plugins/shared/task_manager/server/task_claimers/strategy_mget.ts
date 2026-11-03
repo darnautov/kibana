@@ -101,7 +101,8 @@ export async function claimAvailableTasksMget(
 }
 
 async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershipResult> {
-  const { getCapacity, claimOwnershipUntil, batches, events$, taskStore, taskPartitioner } = opts;
+  const { getCapacity, getMemoryGate, claimOwnershipUntil, batches, events$, taskStore } = opts;
+  const { taskPartitioner } = opts;
   const { definitions, excludedTaskTypes, taskMaxAttempts } = opts;
   const logger = createWrappedLogger({ logger: opts.logger, tags: [claimAvailableTasksMget.name] });
   const initialCapacity = getCapacity();
@@ -162,19 +163,39 @@ async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershi
   // apply limited concurrency limits (TODO: can currently starve other tasks)
   const candidateTasks = selectTasksByCapacity({ definitions, tasks: currentTasks, batches });
 
-  // apply capacity constraint to candidate tasks
+  // apply capacity and, with adaptive capacity, heap budget constraints to candidate tasks
   const tasksToRun: TaskClaimCandidate[] = [];
   const leftOverTasks: TaskClaimCandidate[] = [];
   const tasksWithMalformedData: TaskClaimCandidate[] = [];
+  const memoryGate = getMemoryGate?.();
 
   let capacityAccumulator = 0;
+  let memoryAccumulator = 0;
+  let memoryLimited = 0;
   for (const task of candidateTasks) {
     const taskCost = getTaskCost(task, definitions);
-    if (capacityAccumulator + taskCost <= initialCapacity) {
+    const taskBytes = memoryGate ? memoryGate.estimateBytes(task.id, task.taskType, taskCost) : 0;
+    const fitsCapacity = capacityAccumulator + taskCost <= initialCapacity;
+    // The first task of a cycle is always admitted so a type heavier than the
+    // whole budget cannot be starved; the heap signal throttles the next cycle.
+    const fitsMemory =
+      !memoryGate ||
+      tasksToRun.length === 0 ||
+      memoryAccumulator + taskBytes <= memoryGate.budgetBytes;
+    if (fitsCapacity && fitsMemory) {
       tasksToRun.push(task);
       capacityAccumulator += taskCost;
+      memoryAccumulator += taskBytes;
+    } else if (fitsCapacity) {
+      // Over the heap budget: skip this task but keep looking, lighter candidates
+      // may still fit. It cannot starve, because the first task of a cycle is
+      // always admitted and it will be first once the queue ahead of it drains.
+      leftOverTasks.push(task);
+      memoryLimited++;
     } else {
       leftOverTasks.push(task);
+      // Don't claim further tasks even if smaller tasks are next: leave room for
+      // this one in the next cycle instead of starving it.
       capacityAccumulator = initialCapacity;
     }
   }
@@ -256,7 +277,14 @@ async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershi
   await markUnreadableTasksAsFailed({ taskStore, tasks: unreadableTasks, logger });
 
   // TODO: need a better way to generate stats
-  const message = `task claimer claimed: ${fullTasksToRun.length}; stale: ${staleTasks.length}; conflicts: ${conflicts}; missing: ${missingTasks.length}; capacity reached: ${leftOverTasks.length}; updateErrors: ${bulkUpdateErrors}; getErrors: ${bulkGetErrors}; malformed data errors: ${tasksWithMalformedData.length}`;
+  const memoryMessage = memoryGate
+    ? `; heap budget: ${Math.round(
+        memoryGate.budgetBytes / (1024 * 1024)
+      )} MB, planned: ${Math.round(
+        memoryAccumulator / (1024 * 1024)
+      )} MB, heap limited: ${memoryLimited}`
+    : '';
+  const message = `task claimer claimed: ${fullTasksToRun.length}; stale: ${staleTasks.length}; conflicts: ${conflicts}; missing: ${missingTasks.length}; capacity reached: ${leftOverTasks.length}; updateErrors: ${bulkUpdateErrors}; getErrors: ${bulkGetErrors}; malformed data errors: ${tasksWithMalformedData.length}${memoryMessage}`;
   logger.debug(message);
 
   // build results
