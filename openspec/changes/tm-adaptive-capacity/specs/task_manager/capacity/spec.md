@@ -74,6 +74,20 @@ When `xpack.task_manager.capacity` is a number, Task Manager SHALL behave exactl
 - **WHEN** an operator replaces `capacity: auto` with `capacity: 10` and restarts
 - **THEN** capacity is fixed at 10 and the health endpoint reports `capacity.mode: fixed` and `adaptive_capacity: null`
 
+### Requirement: Utilization reflects heap-driven capacity
+
+The background task utilization reported for autoscaling SHALL compute `load` against the capacity currently in effect, so that a node whose capacity is reduced by heap pressure reports high utilization, and SHALL keep `es_backpressure_active` tied to Elasticsearch-pressure reductions only.
+
+#### Scenario: heap-limited node
+
+- **WHEN** the heap controller has reduced capacity to the running set and every slot is busy
+- **THEN** utilization reports `load` of 100 and `es_backpressure_active` is false, so the autoscaler may add nodes
+
+#### Scenario: Elasticsearch-limited node
+
+- **WHEN** capacity is reduced by Elasticsearch 429 errors
+- **THEN** `es_backpressure_active` is true regardless of the heap-driven value
+
 ## MODIFIED Requirements
 
 ### Requirement: Capacity is visible in the health endpoint

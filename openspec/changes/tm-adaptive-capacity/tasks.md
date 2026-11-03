@@ -23,7 +23,8 @@
 
 - [x] 5.1 Benchmark scripts and README under `scripts/benchmark/`.
 - [x] 5.2 Fixed 10 vs fixed 20 vs auto on the heavy workload; fixed 10 vs auto on the mixed workload. Results in the On Week write-up.
-- [ ] 5.3 4 GB-heap leg and a serverless-profile run.
+- [ ] 5.3 Serverless-profile leg: lean build (`--serverless=es` against a serverless Elasticsearch) with the `background_tasks` node role at a 1 GB heap, the fixed size of serverless background nodes. The full dev build needs more than 1 GB just to start, so this leg cannot reuse the stateful setup. Expect the 128 MB cold-start estimate and the `min_capacity` floor of 5 to matter more than on 2 GB: with ~450 MB of budget the capacity number pins at the floor and the per-task claim gate does the real work, so verify that path and whether the floor should follow the largest task's cost instead of 5.
+- [ ] 5.4 4 GB-heap leg (ECH-sized node) to show scale-up above fixed 10.
 
 ## 6. Hardening before a pull request
 
@@ -31,3 +32,5 @@
 - [ ] 6.2 Docs: `docs/reference/configuration-reference/task-manager-settings.yml`, docker environment allowlist.
 - [ ] 6.3 FTR scenario with `capacity: auto` asserting the health block and that a numeric capacity is unchanged.
 - [ ] 6.4 Decide whether heap-limited leftovers should count toward `tasksLeftUnclaimed` (utilisation and poll-interval signals).
+- [ ] 6.5 Serverless autoscaling: confirm with the kibana-controller owners that heap-driven `load` (`.stats.value.load` of `_background_task_utilization`, scraped as `kibana.background_task_utilization.stats.value.load`) triggers scale-out and is not capped by the pending Elasticsearch-pressure hold (`.stats.value.autoscaling.load`); add a unit test for the utilization stat under adaptive capacity. No kibana-controller change in this On Week. Note the security project's `xpack.task_manager.capacity: 20` on 1 GB nodes in `config/serverless.security.yml`.
+- [ ] 6.6 Floor: make `min_capacity` default to the largest registered task cost instead of a fixed 5 so 1 GB nodes are not pinned above their budget.

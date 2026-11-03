@@ -17,6 +17,7 @@
 - Changing the ECH default-capacity table or Elastic Cloud autoscaling.
 - Making the health endpoint's `capacity_estimation` memory-aware (follow-up: heap-seconds model).
 - Serverless rollout; the controller is evaluated locally first.
+- Any change to kibana-controller (https://github.com/elastic/kibana-controller), which scales serverless background-task nodes on the `load` reported by `/api/task_manager/_background_task_utilization`. This change keeps that signal meaningful (load is computed against the capacity in effect) and documents the interaction; adjusting the scaling logic itself is a separate piece of work.
 
 ## Measurement
 
