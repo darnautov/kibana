@@ -13,6 +13,11 @@ export const MAX_WORKERS_LIMIT = 100;
 export const DEFAULT_CAPACITY = 10;
 export const MAX_CAPACITY = 50;
 export const MIN_CAPACITY = 5;
+export const AUTO_CAPACITY = 'auto';
+export const DEFAULT_ADAPTIVE_HEAP_TARGET_RATIO = 0.75;
+export const DEFAULT_ADAPTIVE_BYTES_PER_TASK = 128 * 1024 * 1024;
+export const DEFAULT_ADAPTIVE_MAX_INCREASE_PER_DECISION = 5;
+export const DEFAULT_ADAPTIVE_DECISION_INTERVAL_MS = 1000;
 export const DEFAULT_MAX_WORKERS = 10;
 export const MGET_DEFAULT_POLL_INTERVAL = 500;
 export const LOW_UTILIZATION_POLL_INTERVAL = 3000;
@@ -102,8 +107,46 @@ export const configSchema = schema.object(
     }),
     /* Whether Task Manager should grant and persist UIAM API keys. Usage of granted UIAM keys is still governed by api_key_type. */
     grant_uiam_api_keys: schema.boolean({ defaultValue: false }),
-    /* The number of normal cost tasks that this Kibana instance will run simultaneously */
-    capacity: schema.maybe(schema.number({ min: MIN_CAPACITY, max: MAX_CAPACITY })),
+    /* The number of normal cost tasks that this Kibana instance will run simultaneously, or `auto` to size it from heap headroom */
+    capacity: schema.maybe(
+      schema.oneOf([
+        schema.number({ min: MIN_CAPACITY, max: MAX_CAPACITY }),
+        schema.literal(AUTO_CAPACITY),
+      ])
+    ),
+    /* Tuning for `capacity: auto`; ignored when capacity is a number */
+    adaptive_capacity: schema.object({
+      /* Never below the cost of the largest task so one can always be claimed */
+      min_capacity: schema.number({
+        min: MIN_CAPACITY,
+        max: MAX_CAPACITY,
+        defaultValue: MIN_CAPACITY,
+      }),
+      max_capacity: schema.number({ min: 1, max: MAX_CAPACITY, defaultValue: MAX_CAPACITY }),
+      /* Share of the heap limit that running tasks may occupy before claiming stops */
+      heap_target_ratio: schema.number({
+        min: 0.2,
+        max: 0.95,
+        defaultValue: DEFAULT_ADAPTIVE_HEAP_TARGET_RATIO,
+      }),
+      /* Heap assumed for a normal-cost task of a type that has not run yet */
+      default_bytes_per_task: schema.number({
+        min: 1024 * 1024,
+        defaultValue: DEFAULT_ADAPTIVE_BYTES_PER_TASK,
+      }),
+      /* Largest capacity increase between two decisions; decreases are immediate */
+      max_increase_per_decision: schema.number({
+        min: 1,
+        max: MAX_CAPACITY,
+        defaultValue: DEFAULT_ADAPTIVE_MAX_INCREASE_PER_DECISION,
+      }),
+      /* How often the controller samples the heap between claims */
+      decision_interval: schema.number({
+        min: 100,
+        max: 60_000,
+        defaultValue: DEFAULT_ADAPTIVE_DECISION_INTERVAL_MS,
+      }),
+    }),
     /* Lets `runSoon(..., { requestImmediateClaim: true })` request an extra claim cycle. */
     claim_nudge: schema.object({
       enabled: schema.boolean({ defaultValue: true }),
@@ -234,6 +277,9 @@ export const configSchema = schema.object(
   },
   {
     validate: (config) => {
+      if (config.adaptive_capacity.min_capacity > config.adaptive_capacity.max_capacity) {
+        return `adaptive_capacity.min_capacity (${config.adaptive_capacity.min_capacity}) cannot exceed adaptive_capacity.max_capacity (${config.adaptive_capacity.max_capacity})`;
+      }
       if (
         config.monitored_stats_required_freshness &&
         config.poll_interval &&
