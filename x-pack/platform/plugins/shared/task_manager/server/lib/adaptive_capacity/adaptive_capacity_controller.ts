@@ -6,6 +6,7 @@
  */
 
 import { getHeapStatistics } from 'v8';
+import { PerformanceObserver, constants as perfConstants } from 'perf_hooks';
 import { BehaviorSubject, type Observable } from 'rxjs';
 import type { Logger } from '@kbn/core/server';
 import type { JsonObject } from '@kbn/utility-types';
@@ -31,7 +32,14 @@ export interface AdaptiveCapacitySettings {
   readonly defaultBytesPerTask: number;
   /** Largest step up between two timer decisions; steps down are unbounded and claims never step up. */
   readonly maxIncreasePerDecision: number;
+  /** Runs estimated at or below this many bytes bypass the heap budget at claim time. */
+  readonly lightTaskBytes: number;
+  /** Normal-cost slots kept open for light runs while the heap budget is exhausted. */
+  readonly lightTaskSlots: number;
 }
+
+/** Subscribes to major garbage collections; returns the unsubscribe function. */
+export type MajorGcObserver = (onMajorGc: () => void) => () => void;
 
 export type AdaptiveCapacityTrigger = 'tick' | 'claim';
 
@@ -43,6 +51,7 @@ export interface AdaptiveCapacityState extends JsonObject {
   heap_baseline_bytes: number;
   heap_projected_bytes: number;
   heap_budget_bytes: number;
+  heap_live_ratio: number;
   bytes_per_normal_task: number;
   running_cost: number;
   free_slots: number;
@@ -57,6 +66,7 @@ export interface AdaptiveCapacityControllerOpts {
   readonly getRunningTasks: () => readonly RunningTaskSnapshot[];
   readonly getHeapStats?: () => HeapStats;
   readonly estimator?: TaskMemoryEstimator;
+  readonly observeMajorGc?: MajorGcObserver;
 }
 
 const BASELINE_ALPHA = 0.2;
@@ -64,6 +74,26 @@ const BASELINE_ALPHA = 0.2;
 export const readV8HeapStats = (): HeapStats => {
   const { used_heap_size: usedHeapBytes, heap_size_limit: heapLimitBytes } = getHeapStatistics();
   return { usedHeapBytes, heapLimitBytes };
+};
+
+interface GcEntryDetail {
+  readonly kind?: number;
+}
+
+/** Watches V8 garbage-collection entries and calls back after each major (mark-compact) collection. */
+export const observeV8MajorGc: MajorGcObserver = (onMajorGc) => {
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      // Garbage-collection entries carry `detail.kind`; the typings predate it.
+      const { detail } = entry as { detail?: GcEntryDetail };
+      if (detail?.kind === perfConstants.NODE_PERFORMANCE_GC_MAJOR) {
+        onMajorGc();
+        return;
+      }
+    }
+  });
+  observer.observe({ entryTypes: ['gc'] });
+  return () => observer.disconnect();
 };
 
 /**
@@ -84,6 +114,7 @@ export class AdaptiveCapacityController {
   private readonly getHeapStats: () => HeapStats;
   private readonly capacitySubject: BehaviorSubject<number>;
   private readonly stateSubject: BehaviorSubject<AdaptiveCapacityState>;
+  private readonly stopGcObserver: () => void;
   private baselineBytes?: number;
   private currentCapacity: number;
   private decisions = 0;
@@ -94,6 +125,7 @@ export class AdaptiveCapacityController {
     getRunningTasks,
     getHeapStats = readV8HeapStats,
     estimator,
+    observeMajorGc = observeV8MajorGc,
   }: AdaptiveCapacityControllerOpts) {
     this.logger = logger;
     this.settings = settings;
@@ -103,7 +135,11 @@ export class AdaptiveCapacityController {
       estimator ??
       new TaskMemoryEstimator({
         defaultBytesPerCostUnit: settings.defaultBytesPerTask / TaskCost.Normal,
+        lightBytesPerCostUnit: settings.lightTaskBytes / TaskCost.Normal,
       });
+    this.stopGcObserver = observeMajorGc(() => {
+      this.estimator.liveSample(this.getHeapStats().usedHeapBytes);
+    });
     this.currentCapacity = settings.minCapacity;
     const initial = this.decide('tick');
     this.currentCapacity = initial.capacity;
@@ -131,10 +167,16 @@ export class AdaptiveCapacityController {
     return this.refresh('tick');
   }
 
+  /** Releases the garbage-collection observer. */
+  public stop(): void {
+    this.stopGcObserver();
+  }
+
   /** Heap budget for the claim that follows the latest decision. */
   public memoryGate(): ClaimMemoryGate {
     return {
       budgetBytes: Math.max(0, this.stateSubject.value.heap_budget_bytes),
+      lightTaskBytes: this.settings.lightTaskBytes,
       estimateBytes: (taskId, taskType, cost) =>
         this.estimator.estimateBytes(taskId, taskType, cost),
     };
@@ -174,7 +216,8 @@ export class AdaptiveCapacityController {
   private decide(trigger: AdaptiveCapacityTrigger): AdaptiveCapacityState {
     const { usedHeapBytes, heapLimitBytes } = this.getHeapStats();
     const running = this.getRunningTasks();
-    const { minCapacity, maxCapacity, heapTargetRatio, maxIncreasePerDecision } = this.settings;
+    const { minCapacity, maxCapacity, heapTargetRatio, maxIncreasePerDecision, lightTaskSlots } =
+      this.settings;
 
     if (running.length === 0) {
       this.baselineBytes =
@@ -197,7 +240,12 @@ export class AdaptiveCapacityController {
     const runningSlots = Math.ceil(runningCost / TaskCost.Normal);
 
     const previous = this.currentCapacity;
-    const wanted = Math.min(maxCapacity, Math.max(minCapacity, runningSlots + freeSlots));
+    // Light runs are admitted against capacity only, so keep `lightTaskSlots`
+    // open beyond the running set even when the heap budget is exhausted.
+    const wanted = Math.min(
+      maxCapacity,
+      Math.max(minCapacity, runningSlots + Math.max(freeSlots, lightTaskSlots))
+    );
     // A claim-time decision only lowers capacity; the timer raises it, one bounded step at a time.
     const capacity =
       wanted <= previous
@@ -215,6 +263,7 @@ export class AdaptiveCapacityController {
       heap_baseline_bytes: Math.round(baseline),
       heap_projected_bytes: Math.round(projectedBytes),
       heap_budget_bytes: Math.round(budgetBytes),
+      heap_live_ratio: Number(this.estimator.liveRatio().toFixed(3)),
       bytes_per_normal_task: Math.round(bytesPerNormalTask),
       running_cost: runningCost,
       free_slots: freeSlots,

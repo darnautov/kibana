@@ -21,6 +21,10 @@ export interface TaskMemoryEstimatorOpts {
   readonly windowSize?: number;
   /** How many task instances keep their own estimate before the oldest is dropped. */
   readonly maxInstances?: number;
+  /** Allocation volume after which the live-to-allocated ratio is re-estimated. */
+  readonly calibrationBytes?: number;
+  /** Runs at or below this many bytes per cost unit are light and do not take part in slot sizing. */
+  readonly lightBytesPerCostUnit?: number;
 }
 
 export interface TaskTypeMemoryEstimate extends JsonObject {
@@ -46,6 +50,9 @@ const DEFAULT_MIN_BYTES_PER_COST_UNIT = 512 * 1024;
 const DEFAULT_SLOT_PERCENTILE = 0.9;
 const DEFAULT_WINDOW_SIZE = 200;
 const DEFAULT_MAX_INSTANCES = 10_000;
+const DEFAULT_CALIBRATION_BYTES = 256 * 1024 * 1024;
+const MIN_LIVE_RATIO = 0.1;
+const DEFAULT_LIGHT_BYTES_PER_COST_UNIT = 0;
 
 /**
  * Learns how much heap each task needs from what the pool is running.
@@ -60,7 +67,16 @@ const DEFAULT_MAX_INSTANCES = 10_000;
  * is an allocation footprint, which errs on the side of claiming less rather
  * than more. Free slots are sized from a high percentile of the recent runs, so
  * a mix of heavy and cheap runs is budgeted for the heavy ones rather than for
- * whichever finished last.
+ * whichever finished last. Light runs (at or below `lightBytesPerCostUnit`) are
+ * left out of that percentile: they are admitted against capacity rather than
+ * the heap budget, so a mix dominated by them must not shrink the slot that
+ * heavy runs are budgeted with.
+ *
+ * The allocation footprint is calibrated against live heap: `liveSample()` is
+ * fed the heap used right after each major garbage collection, and the ratio of
+ * live growth to allocated growth over the same period scales every estimate.
+ * Transient garbage inflates allocation but not live heap, so the ratio brings
+ * the budget closer to what the runs actually occupy at once.
  */
 export class TaskMemoryEstimator {
   private readonly defaultBytesPerCostUnit: number;
@@ -69,11 +85,17 @@ export class TaskMemoryEstimator {
   private readonly slotPercentile: number;
   private readonly windowSize: number;
   private readonly maxInstances: number;
+  private readonly calibrationBytes: number;
+  private readonly lightBytesPerCostUnit: number;
   private readonly byInstance = new Map<string, Estimate>();
   private readonly byType = new Map<string, Estimate>();
   private readonly inFlight = new Map<string, InFlightRun>();
   private readonly recent: number[] = [];
   private lastUsedHeapBytes?: number;
+  private lastLiveHeapBytes?: number;
+  private allocatedGrowth = 0;
+  private liveGrowth = 0;
+  private ratio = 1;
 
   constructor({
     defaultBytesPerCostUnit,
@@ -82,6 +104,8 @@ export class TaskMemoryEstimator {
     slotPercentile = DEFAULT_SLOT_PERCENTILE,
     windowSize = DEFAULT_WINDOW_SIZE,
     maxInstances = DEFAULT_MAX_INSTANCES,
+    calibrationBytes = DEFAULT_CALIBRATION_BYTES,
+    lightBytesPerCostUnit = DEFAULT_LIGHT_BYTES_PER_COST_UNIT,
   }: TaskMemoryEstimatorOpts) {
     this.defaultBytesPerCostUnit = defaultBytesPerCostUnit;
     this.minBytesPerCostUnit = minBytesPerCostUnit;
@@ -89,6 +113,8 @@ export class TaskMemoryEstimator {
     this.slotPercentile = slotPercentile;
     this.windowSize = windowSize;
     this.maxInstances = maxInstances;
+    this.calibrationBytes = calibrationBytes;
+    this.lightBytesPerCostUnit = lightBytesPerCostUnit;
   }
 
   /** Records one heap sample together with the tasks that were running when it was taken. */
@@ -107,6 +133,7 @@ export class TaskMemoryEstimator {
     const delta = this.lastUsedHeapBytes === undefined ? 0 : usedHeapBytes - this.lastUsedHeapBytes;
     this.lastUsedHeapBytes = usedHeapBytes;
 
+    if (delta > 0) this.allocatedGrowth += delta;
     if (delta > 0 && running.length > 0) {
       const totalCost = running.reduce((sum, task) => sum + task.cost, 0);
       for (const task of running) {
@@ -141,21 +168,46 @@ export class TaskMemoryEstimator {
     this.observe(run);
   }
 
+  /**
+   * Records the heap used right after a major garbage collection. Growth between
+   * two such samples is live data; comparing it with the allocation seen by
+   * `sample()` over the same period calibrates the estimates.
+   */
+  public liveSample(usedHeapBytes: number): void {
+    if (this.lastLiveHeapBytes !== undefined) {
+      const delta = usedHeapBytes - this.lastLiveHeapBytes;
+      if (delta > 0) this.liveGrowth += delta;
+    }
+    this.lastLiveHeapBytes = usedHeapBytes;
+    if (this.allocatedGrowth < this.calibrationBytes) return;
+    const observed = Math.min(1, Math.max(MIN_LIVE_RATIO, this.liveGrowth / this.allocatedGrowth));
+    this.ratio = this.alpha * observed + (1 - this.alpha) * this.ratio;
+    this.allocatedGrowth = 0;
+    this.liveGrowth = 0;
+  }
+
+  /** Live-to-allocated heap ratio applied to every estimate; 1 until calibrated. */
+  public liveRatio(): number {
+    return this.ratio;
+  }
+
   /** Estimated heap for one run of this task: its own history first, then its type, then the default. */
   public estimateBytes(taskId: string, taskType: string, cost: number): number {
-    const perCostUnit =
-      this.byInstance.get(taskId)?.bytesPerCostUnit ??
-      this.byType.get(taskType)?.bytesPerCostUnit ??
-      this.defaultBytesPerCostUnit;
+    const learned =
+      this.byInstance.get(taskId)?.bytesPerCostUnit ?? this.byType.get(taskType)?.bytesPerCostUnit;
+    const perCostUnit = learned === undefined ? this.defaultBytesPerCostUnit : learned * this.ratio;
     return Math.max(perCostUnit, this.minBytesPerCostUnit) * cost;
   }
 
-  /** Heap per cost unit at the slot percentile of the recently finished runs, used to size free slots. */
+  /** Heap per cost unit at the slot percentile of the recent heavy runs, used to size free slots. */
   public bytesPerCostUnit(): number {
-    if (this.recent.length === 0) {
+    const heavy = this.recent
+      .map((bytes) => bytes * this.ratio)
+      .filter((bytes) => bytes > this.lightBytesPerCostUnit);
+    if (heavy.length === 0) {
       return Math.max(this.defaultBytesPerCostUnit, this.minBytesPerCostUnit);
     }
-    const sorted = [...this.recent].sort((a, b) => a - b);
+    const sorted = heavy.sort((a, b) => a - b);
     const index = Math.min(sorted.length - 1, Math.floor(this.slotPercentile * sorted.length));
     return Math.max(sorted[index], this.minBytesPerCostUnit);
   }

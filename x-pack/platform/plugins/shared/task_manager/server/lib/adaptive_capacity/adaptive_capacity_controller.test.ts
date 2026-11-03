@@ -19,6 +19,8 @@ const settings = {
   heapTargetRatio: 0.75, // 1536 MB
   defaultBytesPerTask: 100 * MB,
   maxIncreasePerDecision: 5,
+  lightTaskBytes: 0,
+  lightTaskSlots: 0,
 };
 
 const task = (executionId: string, taskType = 't', cost = 2): RunningTaskSnapshot => ({
@@ -28,18 +30,28 @@ const task = (executionId: string, taskType = 't', cost = 2): RunningTaskSnapsho
   cost,
 });
 
-const setup = (opts: { estimator?: TaskMemoryEstimator } = {}) => {
+const setup = (
+  opts: { estimator?: TaskMemoryEstimator; settings?: Partial<typeof settings> } = {}
+) => {
   let usedHeapBytes = 1000 * MB;
   let running: RunningTaskSnapshot[] = [];
+  let majorGc = () => {};
+  const unobserve = jest.fn();
   const controller = new AdaptiveCapacityController({
     logger: loggingSystemMock.createLogger(),
-    settings,
+    settings: { ...settings, ...opts.settings },
     getHeapStats: () => ({ usedHeapBytes, heapLimitBytes: LIMIT }),
     getRunningTasks: () => running,
     estimator: opts.estimator,
+    observeMajorGc: (onMajorGc) => {
+      majorGc = onMajorGc;
+      return unobserve;
+    },
   });
   return {
     controller,
+    majorGc: () => majorGc(),
+    unobserve,
     setHeap: (mb: number) => (usedHeapBytes = mb * MB),
     setRunning: (tasks: RunningTaskSnapshot[]) => (running = tasks),
   };
@@ -130,6 +142,39 @@ describe('AdaptiveCapacityController', () => {
     setRunning([]);
     controller.taskEnded(fast);
     expect(estimator.estimateBytes('task-fast', 'quick', 1)).toBe(40 * MB);
+  });
+
+  it('keeps light-task slots open while the heap budget is exhausted', () => {
+    const { controller, setHeap, setRunning } = setup({
+      settings: { lightTaskSlots: 8, lightTaskBytes: 4 * MB },
+    });
+    setRunning([task('a'), task('b')]);
+    setHeap(1700);
+    controller.refresh('tick');
+    // over target: no free heap slots, but 2 running + 8 light slots
+    expect(controller.state.free_slots).toBe(0);
+    expect(controller.state.capacity).toBe(10);
+    expect(controller.memoryGate().lightTaskBytes).toBe(4 * MB);
+  });
+
+  it('feeds post-GC heap samples to the estimator and stops observing on stop()', () => {
+    const estimator = new TaskMemoryEstimator({
+      defaultBytesPerCostUnit: 50 * MB,
+      calibrationBytes: 100 * MB,
+    });
+    const { controller, setHeap, setRunning, majorGc, unobserve } = setup({ estimator });
+    setRunning([task('a', 'heavy')]);
+    controller.tick(); // first sample at 1000 MB
+    majorGc(); // live baseline 1000 MB
+    setHeap(1400);
+    controller.tick(); // +400 MB allocated
+    setHeap(1100);
+    majorGc(); // +100 MB live over the same period -> ratio 0.25
+    expect(estimator.liveRatio()).toBeCloseTo(0.3 * 0.25 + 0.7 * 1, 3);
+    controller.refresh('tick');
+    expect(controller.state.heap_live_ratio).toBeCloseTo(0.775, 3);
+    controller.stop();
+    expect(unobserve).toHaveBeenCalledTimes(1);
   });
 
   it('lowers the idle baseline slowly so garbage does not read as demand for long', () => {

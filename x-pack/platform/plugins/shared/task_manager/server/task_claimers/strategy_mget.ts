@@ -172,20 +172,29 @@ async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershi
   let capacityAccumulator = 0;
   let memoryAccumulator = 0;
   let memoryLimited = 0;
+  let heavyAdmitted = 0;
   for (const task of candidateTasks) {
     const taskCost = getTaskCost(task, definitions);
     const taskBytes = memoryGate ? memoryGate.estimateBytes(task.id, task.taskType, taskCost) : 0;
     const fitsCapacity = capacityAccumulator + taskCost <= initialCapacity;
-    // The first task of a cycle is always admitted so a type heavier than the
-    // whole budget cannot be starved; the heap signal throttles the next cycle.
+    // Light runs are bounded by capacity alone, so cheap work keeps flowing while
+    // a heavy herd holds the heap budget. While budget remains, the first heavy
+    // candidate of a cycle is admitted even if it alone exceeds it, so a run
+    // heavier than the whole budget cannot starve; with no budget left, heavy
+    // candidates wait for the running ones to finish.
+    const isLight = memoryGate !== undefined && taskBytes <= memoryGate.lightTaskBytes;
     const fitsMemory =
       !memoryGate ||
-      tasksToRun.length === 0 ||
+      isLight ||
+      (memoryGate.budgetBytes > 0 && heavyAdmitted === 0) ||
       memoryAccumulator + taskBytes <= memoryGate.budgetBytes;
     if (fitsCapacity && fitsMemory) {
       tasksToRun.push(task);
       capacityAccumulator += taskCost;
-      memoryAccumulator += taskBytes;
+      if (!isLight) {
+        memoryAccumulator += taskBytes;
+        heavyAdmitted++;
+      }
     } else if (fitsCapacity) {
       // Over the heap budget: skip this task but keep looking, lighter candidates
       // may still fit. It cannot starve, because the first task of a cycle is

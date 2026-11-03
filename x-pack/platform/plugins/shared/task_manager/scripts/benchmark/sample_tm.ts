@@ -45,6 +45,7 @@ interface AdaptiveCapacityHealth {
   heap_baseline_bytes?: number;
   heap_projected_bytes?: number;
   heap_budget_bytes?: number;
+  heap_live_ratio?: number;
   bytes_per_normal_task?: number;
   running_cost?: number;
   free_slots?: number;
@@ -145,6 +146,7 @@ const main = async (): Promise<void> => {
               heap_projected_mb: mb(adaptive.heap_projected_bytes),
               heap_baseline_mb: mb(adaptive.heap_baseline_bytes),
               bytes_per_task_mb: mb(adaptive.bytes_per_normal_task),
+              live_ratio: adaptive.heap_live_ratio,
               running_cost: adaptive.running_cost,
               free_slots: adaptive.free_slots,
               decisions: adaptive.decisions,

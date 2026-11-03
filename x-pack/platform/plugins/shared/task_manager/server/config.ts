@@ -18,6 +18,8 @@ export const DEFAULT_ADAPTIVE_HEAP_TARGET_RATIO = 0.75;
 export const DEFAULT_ADAPTIVE_BYTES_PER_TASK = 128 * 1024 * 1024;
 export const DEFAULT_ADAPTIVE_MAX_INCREASE_PER_DECISION = 5;
 export const DEFAULT_ADAPTIVE_DECISION_INTERVAL_MS = 1000;
+export const DEFAULT_ADAPTIVE_LIGHT_TASK_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_ADAPTIVE_LIGHT_TASK_SLOTS = 10;
 export const DEFAULT_MAX_WORKERS = 10;
 export const MGET_DEFAULT_POLL_INTERVAL = 500;
 export const LOW_UTILIZATION_POLL_INTERVAL = 3000;
@@ -145,6 +147,14 @@ export const configSchema = schema.object(
         min: 100,
         max: 60_000,
         defaultValue: DEFAULT_ADAPTIVE_DECISION_INTERVAL_MS,
+      }),
+      /* Runs estimated at or below this many bytes are admitted against capacity only, not the heap budget */
+      light_task_bytes: schema.number({ min: 0, defaultValue: DEFAULT_ADAPTIVE_LIGHT_TASK_BYTES }),
+      /* Normal-cost slots kept open for light runs while the heap budget is exhausted */
+      light_task_slots: schema.number({
+        min: 0,
+        max: MAX_CAPACITY,
+        defaultValue: DEFAULT_ADAPTIVE_LIGHT_TASK_SLOTS,
       }),
     }),
     /* Lets `runSoon(..., { requestImmediateClaim: true })` request an extra claim cycle. */

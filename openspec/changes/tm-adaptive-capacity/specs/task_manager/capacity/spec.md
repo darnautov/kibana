@@ -56,6 +56,29 @@ In adaptive mode, each claim cycle SHALL admit candidates while the sum of their
 - **WHEN** the budget is 0 and the first candidate is estimated at 500 MB
 - **THEN** that candidate is claimed and nothing else in that cycle
 
+### Requirement: Light runs are bounded by capacity, not by the heap budget
+
+A candidate whose estimated heap is at or below `adaptive_capacity.light_task_bytes` SHALL be admitted against capacity alone and SHALL NOT consume the heap budget. While the heap budget is exhausted, adaptive capacity SHALL keep at least `adaptive_capacity.light_task_slots` normal-cost slots open beyond the running set, and SHALL NOT admit heavy candidates.
+
+#### Scenario: cheap rules during a heavy herd
+
+- **WHEN** two heavy runs have exhausted the heap budget and sixty light rules come due
+- **THEN** the light rules are claimed up to the open slots while further heavy rules wait for budget
+
+#### Scenario: no budget left
+
+- **WHEN** the heap budget is zero and the next candidate is heavy
+- **THEN** it is not claimed in that cycle, even as the first candidate
+
+### Requirement: Estimates are calibrated against live heap
+
+Task Manager SHALL observe the heap used after each major garbage collection and SHALL scale the learned heap estimates by the ratio of live heap growth to allocated heap growth over the same period, re-estimated after every `256 MB` of allocation and never below `0.1`. Cold-start defaults SHALL NOT be scaled.
+
+#### Scenario: transient garbage
+
+- **WHEN** runs allocate 400 MB between two samples and the heap after the next major collection grew by 100 MB
+- **THEN** the ratio moves toward 0.25 and a run previously estimated at 200 MB is budgeted at 50 MB
+
 ### Requirement: Elasticsearch pressure composes with adaptive capacity
 
 In adaptive mode the Elasticsearch-pressure reduction SHALL apply as a ratio of the heap-driven capacity, floored at the cost of the largest task, so that a reduction takes effect in the next window rather than decaying from the ceiling.

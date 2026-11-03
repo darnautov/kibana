@@ -24,6 +24,8 @@ import type { TaskPartitioner } from '../lib/task_partitioner';
  */
 export interface ClaimMemoryGate {
   budgetBytes: number;
+  /** Runs estimated at or below this are admitted against capacity only. */
+  lightTaskBytes: number;
   estimateBytes: (taskId: string, taskType: string, cost: number) => number;
 }
 

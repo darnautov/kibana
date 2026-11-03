@@ -71,6 +71,53 @@ describe('TaskMemoryEstimator', () => {
     expect(estimator.bytesPerCostUnit()).toBe(30 * MB);
   });
 
+  it('scales estimates by the live-to-allocated ratio once calibrated', () => {
+    const estimator = new TaskMemoryEstimator({
+      defaultBytesPerCostUnit: 64 * MB,
+      calibrationBytes: 100 * MB,
+      alpha: 1,
+    });
+    estimator.sample(0, [run('a', 't', 1)]);
+    estimator.liveSample(0);
+    estimator.sample(200 * MB, [run('a', 't', 1)]); // 200 MB allocated by run a
+    estimator.sample(200 * MB, []);
+    expect(estimator.estimateBytes('task-a', 't', 1)).toBe(200 * MB);
+    expect(estimator.liveRatio()).toBe(1);
+
+    estimator.liveSample(50 * MB); // only 50 MB of it is live after GC -> ratio 0.25
+    expect(estimator.liveRatio()).toBe(0.25);
+    expect(estimator.estimateBytes('task-a', 't', 1)).toBe(50 * MB);
+    expect(estimator.bytesPerCostUnit()).toBe(50 * MB);
+    // the cold-start default is not scaled: it is a guess, not an allocation
+    expect(estimator.estimateBytes('task-new', 'other', 1)).toBe(64 * MB);
+  });
+
+  it('sizes slots from heavy runs only, even when light runs dominate', () => {
+    const estimator = new TaskMemoryEstimator({
+      defaultBytesPerCostUnit: 64 * MB,
+      lightBytesPerCostUnit: 4 * MB,
+    });
+    // 20 light runs at 1 MB and two heavy runs at 50 MB
+    for (let i = 0; i < 20; i++) {
+      estimator.sample(0, [run(`l${i}`, 'light', 1)]);
+      estimator.sample(MB, [run(`l${i}`, 'light', 1)]);
+      estimator.sample(MB, []);
+    }
+    for (const id of ['h1', 'h2']) {
+      estimator.sample(0, [run(id, 'heavy', 1)]);
+      estimator.sample(50 * MB, [run(id, 'heavy', 1)]);
+      estimator.sample(50 * MB, []);
+    }
+    expect(estimator.bytesPerCostUnit()).toBe(50 * MB);
+    // with no heavy run observed yet the cold-start default applies
+    const fresh = new TaskMemoryEstimator({
+      defaultBytesPerCostUnit: 64 * MB,
+      lightBytesPerCostUnit: 4 * MB,
+    });
+    fresh.taskEnded(run('l', 'light', 1));
+    expect(fresh.bytesPerCostUnit()).toBe(64 * MB);
+  });
+
   it('records a run that ends between samples, clamped to the minimum', () => {
     const estimator = new TaskMemoryEstimator({
       defaultBytesPerCostUnit: 64 * MB,

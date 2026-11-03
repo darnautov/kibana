@@ -16,6 +16,8 @@ describe('config validation', () => {
           "decision_interval": 1000,
           "default_bytes_per_task": 134217728,
           "heap_target_ratio": 0.75,
+          "light_task_bytes": 8388608,
+          "light_task_slots": 10,
           "max_capacity": 50,
           "max_increase_per_decision": 5,
           "min_capacity": 5,
@@ -94,6 +96,8 @@ describe('config validation', () => {
           "decision_interval": 1000,
           "default_bytes_per_task": 134217728,
           "heap_target_ratio": 0.75,
+          "light_task_bytes": 8388608,
+          "light_task_slots": 10,
           "max_capacity": 50,
           "max_increase_per_decision": 5,
           "min_capacity": 5,
@@ -170,6 +174,8 @@ describe('config validation', () => {
           "decision_interval": 1000,
           "default_bytes_per_task": 134217728,
           "heap_target_ratio": 0.75,
+          "light_task_bytes": 8388608,
+          "light_task_slots": 10,
           "max_capacity": 50,
           "max_increase_per_decision": 5,
           "min_capacity": 5,
@@ -371,6 +377,8 @@ describe('config validation', () => {
       default_bytes_per_task: 134217728,
       max_increase_per_decision: 5,
       decision_interval: 1000,
+      light_task_bytes: 8388608,
+      light_task_slots: 10,
     });
     expect(() =>
       configSchema.validate({ adaptive_capacity: { min_capacity: 30, max_capacity: 20 } })

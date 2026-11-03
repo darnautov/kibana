@@ -97,6 +97,8 @@ const config: TaskManagerConfig = {
     default_bytes_per_task: 134217728,
     max_increase_per_decision: 5,
     decision_interval: 1000,
+    light_task_bytes: 8388608,
+    light_task_slots: 10,
   },
   claim_nudge: {
     enabled: true,

@@ -5,8 +5,13 @@
  * 2.0.
  */
 
-export { AdaptiveCapacityController, readV8HeapStats } from './adaptive_capacity_controller';
+export {
+  AdaptiveCapacityController,
+  readV8HeapStats,
+  observeV8MajorGc,
+} from './adaptive_capacity_controller';
 export type {
+  MajorGcObserver,
   AdaptiveCapacitySettings,
   AdaptiveCapacityState,
   AdaptiveCapacityTrigger,

@@ -49,6 +49,14 @@ export const registerAdaptiveCapacityTelemetry = (
       valueType: ValueType.INT,
     }
   );
+  const liveRatio = meter.createObservableGauge(
+    'kibana.task_manager.adaptive_capacity.heap.live_ratio',
+    {
+      description: 'Live-to-allocated heap ratio applied to the memory estimates.',
+      unit: '1',
+      valueType: ValueType.DOUBLE,
+    }
+  );
   const taskTypeMemory = meter.createObservableGauge(
     'kibana.task_manager.adaptive_capacity.task_type.memory',
     {
@@ -66,12 +74,13 @@ export const registerAdaptiveCapacityTelemetry = (
       result.observe(heapBudget, state.heap_budget_bytes);
       result.observe(heapProjected, state.heap_projected_bytes);
       result.observe(slotMemory, state.bytes_per_normal_task);
+      result.observe(liveRatio, state.heap_live_ratio);
       for (const estimate of state.estimates) {
         result.observe(taskTypeMemory, estimate.bytes_per_cost_unit, {
           'task.type': estimate.task_type,
         });
       }
     },
-    [capacity, heapBudget, heapProjected, slotMemory, taskTypeMemory]
+    [capacity, heapBudget, heapProjected, slotMemory, liveRatio, taskTypeMemory]
   );
 };

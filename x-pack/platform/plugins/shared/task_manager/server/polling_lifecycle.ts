@@ -222,6 +222,8 @@ export class TaskPollingLifecycle implements ITaskEventEmitter<TaskLifecycleEven
           heapTargetRatio: adaptive.heap_target_ratio,
           defaultBytesPerTask: adaptive.default_bytes_per_task,
           maxIncreasePerDecision: adaptive.max_increase_per_decision,
+          lightTaskBytes: adaptive.light_task_bytes,
+          lightTaskSlots: adaptive.light_task_slots,
         },
         // The first decision runs in the controller's constructor, before the pool exists.
         getRunningTasks: () => (this.pool ? this.pool.getRunningTasks() : []),
@@ -484,6 +486,7 @@ export class TaskPollingLifecycle implements ITaskEventEmitter<TaskLifecycleEven
   public stop() {
     this.stopped = true;
     this.adaptiveCapacitySubscription?.unsubscribe();
+    this.adaptiveCapacity?.stop();
     this.executionControlSubscription?.unsubscribe();
     this.backpressureSubscription?.unsubscribe();
     this.poller.stop();

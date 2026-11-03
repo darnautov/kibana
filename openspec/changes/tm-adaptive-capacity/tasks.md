@@ -28,7 +28,8 @@
 
 ## 6. Hardening before a pull request
 
-- [ ] 6.1 GC-aware estimation (heap after GC via `perf_hooks` GC observer) or task-reported hints.
+- [x] 6.1 GC-aware calibration: `perf_hooks` GC observer feeds post-major-GC heap to the estimator; live-to-allocated ratio scales estimates (`heap_live_ratio` in health + OTel). Task-reported hints remain a follow-up.
+- [x] 6.1a Light runs bypass the heap budget (`light_task_bytes`, `light_task_slots`); heavy candidates wait when the budget is exhausted. Verified by `strategy_mget.test.ts` and `adaptive_capacity_controller.test.ts`.
 - [ ] 6.2 Docs: `docs/reference/configuration-reference/task-manager-settings.yml`, docker environment allowlist.
 - [ ] 6.3 FTR scenario with `capacity: auto` asserting the health block and that a numeric capacity is unchanged.
 - [ ] 6.4 Decide whether heap-limited leftovers should count toward `tasksLeftUnclaimed` (utilisation and poll-interval signals).
