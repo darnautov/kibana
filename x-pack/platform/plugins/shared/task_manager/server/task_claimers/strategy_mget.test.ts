@@ -463,8 +463,8 @@ describe('TaskClaiming', () => {
       store.convertToSavedObjectIds.mockImplementation((ids) => ids.map((id) => `task:${id}`));
 
       const fetchedTasks = [
-        mockInstance({ id: `heavy-1`, taskType: 'report' }), // 120 MB, first heavy: admitted while budget > 0
-        mockInstance({ id: `heavy-2`, taskType: 'report' }), // over the 100 MB budget, skipped
+        mockInstance({ id: `heavy-1`, taskType: 'report' }), // 120 MB, over the 100 MB budget: skipped
+        mockInstance({ id: `heavy-2`, taskType: 'report' }), // skipped as well
         mockInstance({ id: `light-1`, taskType: 'report' }), // 1 MB, light: admitted
         mockInstance({ id: `light-2`, taskType: 'report' }), // light: admitted
       ];
@@ -472,7 +472,7 @@ describe('TaskClaiming', () => {
       const { versionMap, docLatestVersions } = getVersionMapsFromTasks(fetchedTasks);
       store.msearch.mockResolvedValueOnce({ docs: fetchedTasks, versionMap });
       store.getDocVersions.mockResolvedValueOnce(docLatestVersions);
-      const admitted = [fetchedTasks[0], fetchedTasks[2], fetchedTasks[3]];
+      const admitted = [fetchedTasks[2], fetchedTasks[3]];
       store.bulkGet.mockResolvedValueOnce(admitted.map(asOk));
       store.bulkPartialUpdate.mockResolvedValueOnce(admitted.map(getPartialUpdateResult));
 
@@ -500,11 +500,10 @@ describe('TaskClaiming', () => {
       ) as ClaimOwnershipResult;
 
       expect(store.bulkPartialUpdate.mock.calls[0][0].map((task) => task.id)).toEqual([
-        'heavy-1',
         'light-1',
         'light-2',
       ]);
-      expect(result.stats).toMatchObject({ tasksClaimed: 3, tasksLeftUnclaimed: 1 });
+      expect(result.stats).toMatchObject({ tasksClaimed: 2, tasksLeftUnclaimed: 2 });
     });
 
     test('should admit no heavy task when the heap budget is exhausted', async () => {
@@ -542,7 +541,7 @@ describe('TaskClaiming', () => {
       expect(result.stats).toMatchObject({ tasksClaimed: 0, tasksLeftUnclaimed: 1 });
     });
 
-    test('should admit the first heavy task of a cycle even when it exceeds the remaining budget', async () => {
+    test('should skip a heavy task that exceeds the remaining budget even when it is the first candidate', async () => {
       const store = taskStoreMock.create({ taskManagerId: 'test-test' });
       store.convertToSavedObjectIds.mockImplementation((ids) => ids.map((id) => `task:${id}`));
 
@@ -550,8 +549,8 @@ describe('TaskClaiming', () => {
       const { versionMap, docLatestVersions } = getVersionMapsFromTasks(fetchedTasks);
       store.msearch.mockResolvedValueOnce({ docs: fetchedTasks, versionMap });
       store.getDocVersions.mockResolvedValueOnce(docLatestVersions);
-      store.bulkGet.mockResolvedValueOnce(fetchedTasks.map(asOk));
-      store.bulkPartialUpdate.mockResolvedValueOnce(fetchedTasks.map(getPartialUpdateResult));
+      store.bulkGet.mockResolvedValueOnce([]);
+      store.bulkPartialUpdate.mockResolvedValueOnce([]);
 
       const taskClaiming = new TaskClaiming({
         logger: taskManagerLogger,
@@ -574,7 +573,7 @@ describe('TaskClaiming', () => {
           claimOwnershipUntil: new Date(),
         })
       ) as ClaimOwnershipResult;
-      expect(result.stats).toMatchObject({ tasksClaimed: 1, tasksLeftUnclaimed: 0 });
+      expect(result.stats).toMatchObject({ tasksClaimed: 0, tasksLeftUnclaimed: 1 });
     });
 
     test('should limit claimed tasks based on task cost and available capacity', async () => {

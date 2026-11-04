@@ -172,33 +172,28 @@ async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershi
   let capacityAccumulator = 0;
   let memoryAccumulator = 0;
   let memoryLimited = 0;
-  let heavyAdmitted = 0;
   for (const task of candidateTasks) {
     const taskCost = getTaskCost(task, definitions);
     const taskBytes = memoryGate ? memoryGate.estimateBytes(task.id, task.taskType, taskCost) : 0;
     const fitsCapacity = capacityAccumulator + taskCost <= initialCapacity;
     // Light runs are bounded by capacity alone, so cheap work keeps flowing while
-    // a heavy herd holds the heap budget. While budget remains, the first heavy
-    // candidate of a cycle is admitted even if it alone exceeds it, so a run
-    // heavier than the whole budget cannot starve; with no budget left, heavy
-    // candidates wait for the running ones to finish.
+    // a heavy herd holds the heap budget. A heavy candidate is admitted only when
+    // its estimate fits the budget left by the running tasks; one that does not
+    // fit waits, and gets its turn as soon as the pool drains enough. A run that
+    // would not fit an idle node at all is never admitted: on a small heap that
+    // is the difference between a visible backlog and a process that dies.
     const isLight = memoryGate !== undefined && taskBytes <= memoryGate.lightTaskBytes;
     const fitsMemory =
-      !memoryGate ||
-      isLight ||
-      (memoryGate.budgetBytes > 0 && heavyAdmitted === 0) ||
-      memoryAccumulator + taskBytes <= memoryGate.budgetBytes;
+      !memoryGate || isLight || memoryAccumulator + taskBytes <= memoryGate.budgetBytes;
     if (fitsCapacity && fitsMemory) {
       tasksToRun.push(task);
       capacityAccumulator += taskCost;
       if (!isLight) {
         memoryAccumulator += taskBytes;
-        heavyAdmitted++;
       }
     } else if (fitsCapacity) {
       // Over the heap budget: skip this task but keep looking, lighter candidates
-      // may still fit. It cannot starve, because the first task of a cycle is
-      // always admitted and it will be first once the queue ahead of it drains.
+      // may still fit.
       leftOverTasks.push(task);
       memoryLimited++;
     } else {

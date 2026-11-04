@@ -7,7 +7,7 @@
 
 import { loggingSystemMock } from '@kbn/core/server/mocks';
 import type { RunningTaskSnapshot } from '../../task_pool';
-import { AdaptiveCapacityController } from './adaptive_capacity_controller';
+import { AdaptiveCapacityController, readMaxOldSpaceBytes } from './adaptive_capacity_controller';
 import { TaskMemoryEstimator } from './task_memory_estimator';
 
 const MB = 1024 * 1024;
@@ -177,11 +177,45 @@ describe('AdaptiveCapacityController', () => {
     expect(unobserve).toHaveBeenCalledTimes(1);
   });
 
+  it('takes the baseline from post-GC heap net of the running estimates, and keeps it under load', () => {
+    const { controller, setHeap, setRunning, majorGc } = setup();
+    setRunning([task('a', 'heavy')]); // default estimate: 100 MB
+    setHeap(1300);
+    majorGc(); // live 1300 MB - 100 MB committed
+    controller.refresh('tick');
+    expect(controller.state.heap_baseline_bytes).toBe(1200 * MB);
+    // An idle tick no longer overwrites the live baseline with a garbage-laden reading.
+    setRunning([]);
+    setHeap(1500);
+    controller.refresh('tick');
+    expect(controller.state.heap_baseline_bytes).toBe(1200 * MB);
+    // Later collections move it slowly.
+    setHeap(1250);
+    majorGc();
+    controller.refresh('tick');
+    expect(controller.state.heap_baseline_bytes).toBe((0.2 * 1250 + 0.8 * 1200) * MB);
+  });
+
   it('lowers the idle baseline slowly so garbage does not read as demand for long', () => {
     const { controller, setHeap } = setup();
     setHeap(1400);
     controller.refresh('tick');
     expect(controller.state.heap_baseline_bytes).toBe(1080 * MB);
     expect(controller.state.heap_projected_bytes).toBe(1400 * MB);
+  });
+});
+
+describe('readMaxOldSpaceBytes', () => {
+  it('reads --max-old-space-size from NODE_OPTIONS and from execArgv, in both spellings', () => {
+    expect(readMaxOldSpaceBytes([], '--max-old-space-size=819')).toBe(819 * MB);
+    expect(readMaxOldSpaceBytes(['--max-old-space-size=2048'], undefined)).toBe(2048 * MB);
+    expect(readMaxOldSpaceBytes(['--max-old-space-size', '1024'], '')).toBe(1024 * MB);
+  });
+
+  it('lets a command-line flag override NODE_OPTIONS and returns undefined without a flag', () => {
+    expect(readMaxOldSpaceBytes(['--max-old-space-size=1024'], '--max-old-space-size=4096')).toBe(
+      1024 * MB
+    );
+    expect(readMaxOldSpaceBytes(['--inspect'], '--no-warnings')).toBeUndefined();
   });
 });

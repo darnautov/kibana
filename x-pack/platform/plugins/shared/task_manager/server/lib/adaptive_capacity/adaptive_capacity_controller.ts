@@ -71,9 +71,36 @@ export interface AdaptiveCapacityControllerOpts {
 
 const BASELINE_ALPHA = 0.2;
 
+const MAX_OLD_SPACE_FLAG = /--max-old-space-size(?:=|\s+)(\d+)/g;
+
+/**
+ * Old-space limit set through `--max-old-space-size`, in bytes, or undefined
+ * when the flag is absent. V8 reports `heap_size_limit` with the young
+ * generation and code space added on top of it, so the old space fills, and
+ * the process dies, before `used_heap_size` gets anywhere near that figure.
+ */
+export const readMaxOldSpaceBytes = (
+  execArgv: readonly string[] = process.execArgv,
+  nodeOptions: string | undefined = process.env.NODE_OPTIONS
+): number | undefined => {
+  // Command-line flags take precedence over NODE_OPTIONS, so they are scanned last.
+  const flags = [nodeOptions ?? '', ...execArgv].join(' ');
+  let lastMb: number | undefined;
+  for (const match of flags.matchAll(MAX_OLD_SPACE_FLAG)) {
+    lastMb = Number(match[1]);
+  }
+  return lastMb === undefined ? undefined : lastMb * 1024 * 1024;
+};
+
+/** Heap used and the limit the process will actually die at: the old-space cap when one is set. */
 export const readV8HeapStats = (): HeapStats => {
-  const { used_heap_size: usedHeapBytes, heap_size_limit: heapLimitBytes } = getHeapStatistics();
-  return { usedHeapBytes, heapLimitBytes };
+  const { used_heap_size: usedHeapBytes, heap_size_limit: heapSizeLimit } = getHeapStatistics();
+  const maxOldSpaceBytes = readMaxOldSpaceBytes();
+  return {
+    usedHeapBytes,
+    heapLimitBytes:
+      maxOldSpaceBytes === undefined ? heapSizeLimit : Math.min(heapSizeLimit, maxOldSpaceBytes),
+  };
 };
 
 interface GcEntryDetail {
@@ -116,6 +143,7 @@ export class AdaptiveCapacityController {
   private readonly stateSubject: BehaviorSubject<AdaptiveCapacityState>;
   private readonly stopGcObserver: () => void;
   private baselineBytes?: number;
+  private liveBaselineSeen = false;
   private currentCapacity: number;
   private decisions = 0;
 
@@ -138,7 +166,9 @@ export class AdaptiveCapacityController {
         lightBytesPerCostUnit: settings.lightTaskBytes / TaskCost.Normal,
       });
     this.stopGcObserver = observeMajorGc(() => {
-      this.estimator.liveSample(this.getHeapStats().usedHeapBytes);
+      const { usedHeapBytes } = this.getHeapStats();
+      this.estimator.liveSample(usedHeapBytes);
+      this.observeLiveBaseline(usedHeapBytes);
     });
     this.currentCapacity = settings.minCapacity;
     const initial = this.decide('tick');
@@ -192,6 +222,28 @@ export class AdaptiveCapacityController {
     this.estimator.taskEnded(task);
   }
 
+  /**
+   * Right after a major collection the heap holds live data only: the idle
+   * baseline plus what the running tasks still need. Taking the running
+   * estimates off gives a baseline free of garbage that keeps tracking under
+   * steady load, when the pool never empties.
+   */
+  private observeLiveBaseline(liveHeapBytes: number): void {
+    const observed = Math.max(0, liveHeapBytes - this.committedBytes(this.getRunningTasks()));
+    this.baselineBytes =
+      this.baselineBytes === undefined || !this.liveBaselineSeen
+        ? observed
+        : BASELINE_ALPHA * observed + (1 - BASELINE_ALPHA) * this.baselineBytes;
+    this.liveBaselineSeen = true;
+  }
+
+  private committedBytes(running: readonly RunningTaskSnapshot[]): number {
+    return running.reduce(
+      (sum, task) => sum + this.estimator.estimateBytes(task.taskId, task.taskType, task.cost),
+      0
+    );
+  }
+
   /** Re-evaluates capacity now; returns the new value and emits it if it changed. */
   public refresh(trigger: AdaptiveCapacityTrigger): number {
     const state = this.decide(trigger);
@@ -219,7 +271,9 @@ export class AdaptiveCapacityController {
     const { minCapacity, maxCapacity, heapTargetRatio, maxIncreasePerDecision, lightTaskSlots } =
       this.settings;
 
-    if (running.length === 0) {
+    // Until a major collection has been observed, an idle heap (garbage included) is
+    // the only baseline available; it errs on the safe side.
+    if (running.length === 0 && !this.liveBaselineSeen) {
       this.baselineBytes =
         this.baselineBytes === undefined
           ? usedHeapBytes
@@ -228,10 +282,7 @@ export class AdaptiveCapacityController {
     const baseline = this.baselineBytes ?? usedHeapBytes;
 
     const runningCost = running.reduce((sum, task) => sum + task.cost, 0);
-    const committedBytes = running.reduce(
-      (sum, task) => sum + this.estimator.estimateBytes(task.taskId, task.taskType, task.cost),
-      0
-    );
+    const committedBytes = this.committedBytes(running);
     const targetBytes = heapLimitBytes * heapTargetRatio;
     const projectedBytes = Math.max(usedHeapBytes, baseline + committedBytes);
     const budgetBytes = targetBytes - projectedBytes;
