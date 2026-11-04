@@ -19,7 +19,9 @@
  * `--skip-minutes N` to drop the first N minutes of each file, for example the
  * backlog drain after a Kibana restart. `--rows-returned N` keeps only alerting v2
  * rule runs whose query returned N rows, which separates heavy from light rules
- * created from the same index with different `--limit` values.
+ * created from the same index with different `--limit` values. A sample file that
+ * carries the node's `kibana.uuid` is summarised for that node only (event log runs
+ * are filtered by `kibana.server_uuid`); pass `--all-nodes` to count every node.
  */
 
 import { readFileSync } from 'fs';
@@ -28,6 +30,7 @@ import { es, intArg, log, parseArgs } from './lib';
 interface Sample {
   '@timestamp': string;
   label: string;
+  kibana?: { uuid?: string; name?: string };
   process: {
     uptime_ms?: number;
     heap_used_mb?: number;
@@ -111,13 +114,21 @@ const NS_PER_S = 1e9;
 interface RunFilter {
   readonly taskType?: string;
   readonly rowsReturned?: number;
+  readonly allNodes?: boolean;
 }
 
-const queryRuns = async (from: string, to: string, runFilter: RunFilter): Promise<RunStats> => {
+const queryRuns = async (
+  from: string,
+  to: string,
+  runFilter: RunFilter,
+  serverUuid?: string
+): Promise<RunStats> => {
   const filter: unknown[] = [
     { term: { 'event.action': 'task-run' } },
     { range: { '@timestamp': { gte: from, lte: to } } },
   ];
+  if (serverUuid && !runFilter.allNodes)
+    filter.push({ term: { 'kibana.server_uuid': serverUuid } });
   if (runFilter.taskType) filter.push({ term: { 'kibana.task.type': runFilter.taskType } });
   if (runFilter.rowsReturned !== undefined) {
     filter.push({
@@ -128,6 +139,8 @@ const queryRuns = async (from: string, to: string, runFilter: RunFilter): Promis
   const result = await es<EventLogAggs>('/.kibana-event-log*/_search?size=0', {
     method: 'POST',
     body: {
+      // the default total caps at 10,000, which an overnight run exceeds many times over
+      track_total_hits: true,
       query: { bool: { filter } },
       aggs: {
         duration: { percentiles: { field: 'event.duration', percents: [50, 99] } },
@@ -160,11 +173,13 @@ const summarize = async (file: string, runFilter: RunFilter, skipMinutes = 0): P
   const from = samples[0]['@timestamp'];
   const to = samples[samples.length - 1]['@timestamp'];
   const minutes = (new Date(to).getTime() - new Date(from).getTime()) / 60_000;
-  const runStats = await queryRuns(from, to, runFilter);
+  const runStats = await queryRuns(from, to, runFilter, samples[0].kibana?.uuid);
   const capacities = samples.map((s) => s.task_manager.capacity?.as_cost);
   return {
     ...runStats,
-    label: samples[0].label,
+    label: samples[0].kibana?.name
+      ? `${samples[0].label} @ ${samples[0].kibana.name}`
+      : samples[0].label,
     minutes,
     runsPerMinute: minutes > 0 ? runStats.runs / minutes : 0,
     heapPeakMb: max(samples.map((s) => s.process.heap_used_mb)),
@@ -186,7 +201,7 @@ const main = async (): Promise<void> => {
   const rowsReturned = args.values.has('rows-returned')
     ? intArg(args, 'rows-returned', 0)
     : undefined;
-  const runFilter: RunFilter = { taskType, rowsReturned };
+  const runFilter: RunFilter = { taskType, rowsReturned, allNodes: args.flags.has('all-nodes') };
   const files = process.argv.slice(2).filter((arg, i, all) => {
     if (arg.startsWith('--')) return false;
     return !(i > 0 && ['--task-type', '--skip-minutes', '--rows-returned'].includes(all[i - 1]));

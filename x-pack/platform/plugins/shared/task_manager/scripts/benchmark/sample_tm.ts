@@ -99,6 +99,11 @@ interface MetricsResponse {
   };
 }
 
+interface StatusResponse {
+  uuid?: string;
+  name?: string;
+}
+
 const safe = async <T>(fn: () => Promise<T>): Promise<T | undefined> => {
   try {
     return await fn();
@@ -117,10 +122,11 @@ const main = async (): Promise<void> => {
   log(`Sampling every ${intervalMs} ms into ${out} (label=${label})`);
 
   for (;;) {
-    const [stats, health, metrics] = await Promise.all([
+    const [stats, health, metrics, status] = await Promise.all([
       safe(() => kbn<StatsResponse>('/api/stats?extended=false')),
       safe(() => kbn<HealthResponse>('/api/task_manager/_health')),
       safe(() => kbn<MetricsResponse>('/api/task_manager/metrics?reset=false')),
+      safe(() => kbn<StatusResponse>('/api/status')),
     ]);
 
     const process_ = stats?.process;
@@ -129,6 +135,8 @@ const main = async (): Promise<void> => {
     const sample = {
       '@timestamp': new Date().toISOString(),
       label,
+      // identifies the sampled node so a multi-node run can be summarised per node
+      kibana: { uuid: status?.uuid, name: status?.name },
       process: {
         uptime_ms: process_?.uptime_ms,
         heap_used_mb: mb(process_?.memory?.heap?.used_bytes),

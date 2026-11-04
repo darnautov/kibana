@@ -17,7 +17,9 @@
  *
  * Usage:
  *   node --import tsx x-pack/platform/plugins/shared/task_manager/scripts/benchmark/seed_wide_index.ts \
- *     [--index tm-bench-wide-source] [--rows 1000] [--columns 2] [--column-bytes 23000] [--hosts 100]
+ *     [--index tm-bench-wide-source] [--rows 1000] [--columns 2] [--column-bytes 23000] [--hosts 100] [--serverless]
+ *
+ * `--serverless` omits the shard and replica settings, which serverless Elasticsearch rejects.
  */
 
 import { DEFAULT_INDEX, chunk, es, intArg, log, parseArgs, payloadColumn, strArg } from './lib';
@@ -33,6 +35,7 @@ const main = async (): Promise<void> => {
   const columns = intArg(args, 'columns', 2);
   const columnBytes = intArg(args, 'column-bytes', 23_000);
   const hosts = intArg(args, 'hosts', 100);
+  const serverless = args.flags.has('serverless');
 
   if (columnBytes > MAX_COLUMN_BYTES) {
     throw new Error(`--column-bytes must be <= ${MAX_COLUMN_BYTES}`);
@@ -56,7 +59,9 @@ const main = async (): Promise<void> => {
   await es(`/${index}`, {
     method: 'PUT',
     body: {
-      settings: { number_of_shards: 1, number_of_replicas: 0, refresh_interval: '5s' },
+      settings: serverless
+        ? { refresh_interval: '5s' }
+        : { number_of_shards: 1, number_of_replicas: 0, refresh_interval: '5s' },
       mappings: { properties },
     },
   });
