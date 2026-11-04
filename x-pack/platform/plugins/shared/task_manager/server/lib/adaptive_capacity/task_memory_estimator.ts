@@ -38,6 +38,12 @@ interface Estimate {
   samples: number;
 }
 
+interface TypeEstimate {
+  /** Most recent observations of this type, per cost unit, oldest first. */
+  readonly recent: number[];
+  samples: number;
+}
+
 interface InFlightRun {
   readonly taskId: string;
   readonly taskType: string;
@@ -49,6 +55,7 @@ const DEFAULT_ALPHA = 0.3;
 const DEFAULT_MIN_BYTES_PER_COST_UNIT = 512 * 1024;
 const DEFAULT_SLOT_PERCENTILE = 0.9;
 const DEFAULT_WINDOW_SIZE = 200;
+const TYPE_WINDOW_SIZE = 32;
 const DEFAULT_MAX_INSTANCES = 10_000;
 const DEFAULT_CALIBRATION_BYTES = 256 * 1024 * 1024;
 const MIN_LIVE_RATIO = 0.1;
@@ -62,8 +69,11 @@ const DEFAULT_LIGHT_BYTES_PER_COST_UNIT = 0;
  * their cost. When a run ends its accumulated share becomes one observation,
  * folded into a moving average for that task instance and another for its type.
  * Recurring tasks keep a stable id, so the instance average predicts the next
- * run of the same rule or workflow; the type average covers instances that have
- * not run yet. Heap released by garbage collection is ignored, so the estimate
+ * run of the same rule or workflow. Instances that have not run yet take the
+ * heavy end (`slotPercentile`) of their type's recent runs rather than its
+ * average: one type can hold a 230 KB rule and a 46 MB rule, and a few cheap
+ * instances must not make an unseen expensive one look light. Heap released by
+ * garbage collection is ignored, so the estimate
  * is an allocation footprint, which errs on the side of claiming less rather
  * than more. Free slots are sized from a high percentile of the recent runs, so
  * a mix of heavy and cheap runs is budgeted for the heavy ones rather than for
@@ -88,7 +98,7 @@ export class TaskMemoryEstimator {
   private readonly calibrationBytes: number;
   private readonly lightBytesPerCostUnit: number;
   private readonly byInstance = new Map<string, Estimate>();
-  private readonly byType = new Map<string, Estimate>();
+  private readonly byType = new Map<string, TypeEstimate>();
   private readonly inFlight = new Map<string, InFlightRun>();
   private readonly recent: number[] = [];
   private lastUsedHeapBytes?: number;
@@ -191,10 +201,10 @@ export class TaskMemoryEstimator {
     return this.ratio;
   }
 
-  /** Estimated heap for one run of this task: its own history first, then its type, then the default. */
+  /** Estimated heap for one run of this task: its own history first, then the heavy end of its type, then the default. */
   public estimateBytes(taskId: string, taskType: string, cost: number): number {
     const learned =
-      this.byInstance.get(taskId)?.bytesPerCostUnit ?? this.byType.get(taskType)?.bytesPerCostUnit;
+      this.byInstance.get(taskId)?.bytesPerCostUnit ?? this.typeBytesPerCostUnit(taskType);
     const perCostUnit = learned === undefined ? this.defaultBytesPerCostUnit : learned * this.ratio;
     return Math.max(perCostUnit, this.minBytesPerCostUnit) * cost;
   }
@@ -207,9 +217,12 @@ export class TaskMemoryEstimator {
     if (heavy.length === 0) {
       return Math.max(this.defaultBytesPerCostUnit, this.minBytesPerCostUnit);
     }
-    const sorted = heavy.sort((a, b) => a - b);
-    const index = Math.min(sorted.length - 1, Math.floor(this.slotPercentile * sorted.length));
-    return Math.max(sorted[index], this.minBytesPerCostUnit);
+    return Math.max(percentile(heavy, this.slotPercentile), this.minBytesPerCostUnit);
+  }
+
+  private typeBytesPerCostUnit(taskType: string): number | undefined {
+    const estimate = this.byType.get(taskType);
+    return estimate === undefined ? undefined : percentile(estimate.recent, this.slotPercentile);
   }
 
   public hasObservations(): boolean {
@@ -220,7 +233,7 @@ export class TaskMemoryEstimator {
   public snapshot(limit = 10): TaskTypeMemoryEstimate[] {
     return Array.from(this.byType, ([taskType, estimate]) => ({
       task_type: taskType,
-      bytes_per_cost_unit: Math.round(estimate.bytesPerCostUnit),
+      bytes_per_cost_unit: Math.round(percentile(estimate.recent, this.slotPercentile)),
       samples: estimate.samples,
     }))
       .sort((a, b) => b.bytes_per_cost_unit - a.bytes_per_cost_unit)
@@ -229,7 +242,11 @@ export class TaskMemoryEstimator {
 
   private observe(run: InFlightRun): void {
     const observed = run.cost > 0 ? run.bytes / run.cost : run.bytes;
-    this.fold(this.byType, run.taskType, observed);
+    const type = this.byType.get(run.taskType) ?? { recent: [], samples: 0 };
+    type.recent.push(observed);
+    if (type.recent.length > TYPE_WINDOW_SIZE) type.recent.shift();
+    type.samples++;
+    this.byType.set(run.taskType, type);
     this.fold(this.byInstance, run.taskId, observed);
     if (this.byInstance.size > this.maxInstances) {
       const oldest = this.byInstance.keys().next().value;
@@ -250,3 +267,10 @@ export class TaskMemoryEstimator {
     estimates.set(key, { bytesPerCostUnit: observed, samples: 1 });
   }
 }
+
+/** Value at `fraction` of the way through `values` once sorted; `values` must not be empty. */
+const percentile = (values: readonly number[], fraction: number): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.floor(fraction * sorted.length));
+  return sorted[index];
+};

@@ -44,7 +44,7 @@ describe('TaskMemoryEstimator', () => {
     ]);
   });
 
-  it('smooths repeated observations of one type', () => {
+  it('estimates unseen instances from the heavy end of their type', () => {
     const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB, alpha: 0.5 });
     estimator.sample(0, [run('a', 't')]);
     estimator.sample(100 * MB, [run('a', 't')]);
@@ -54,11 +54,30 @@ describe('TaskMemoryEstimator', () => {
     estimator.sample(100 * MB, [run('b', 't')]);
     estimator.sample(300 * MB, [run('b', 't')]);
     estimator.sample(300 * MB, []);
-    // type: 0.5 * 100 + 0.5 * 50 = 75 MB per cost unit; instances keep their own history
-    expect(estimator.estimateBytes('task-unseen', 't', 2)).toBe(150 * MB);
+    // type p90 of [50, 100] MB per cost unit = 100; instances keep their own history
+    expect(estimator.estimateBytes('task-unseen', 't', 2)).toBe(200 * MB);
     expect(estimator.estimateBytes('task-a', 't', 2)).toBe(100 * MB);
     expect(estimator.estimateBytes('task-b', 't', 2)).toBe(200 * MB);
-    expect(estimator.snapshot()[0].samples).toBe(2);
+    expect(estimator.snapshot()[0]).toEqual({
+      task_type: 't',
+      bytes_per_cost_unit: 100 * MB,
+      samples: 2,
+    });
+  });
+
+  it('does not let cheap instances of a type make an unseen instance look light', () => {
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+    estimator.sample(0, [run('heavy', 'rule')]);
+    estimator.sample(100 * MB, [run('heavy', 'rule')]);
+    estimator.sample(100 * MB, []); // heavy instance: 50 MB per cost unit
+    for (let i = 0; i < 5; i++) {
+      estimator.sample(100 * MB, [run(`light-${i}`, 'rule')]);
+      estimator.sample(101 * MB, [run(`light-${i}`, 'rule')]);
+      estimator.sample(101 * MB, []); // 0.5 MB per cost unit each
+      estimator.sample(100 * MB, []);
+    }
+    expect(estimator.estimateBytes('task-light-0', 'rule', 2)).toBe(MB);
+    expect(estimator.estimateBytes('task-unseen', 'rule', 2)).toBe(100 * MB);
   });
 
   it('sizes a slot from the heavy end of the recent mix', () => {

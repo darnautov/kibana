@@ -150,6 +150,8 @@ const main = async (): Promise<void> => {
         capacity: health?.stats?.configuration?.value?.capacity,
         adaptive: adaptive
           ? {
+              heap_limit_mb: mb(adaptive.heap_limit_bytes),
+              heap_target_mb: mb(adaptive.heap_target_bytes),
               heap_budget_mb: mb(adaptive.heap_budget_bytes),
               heap_projected_mb: mb(adaptive.heap_projected_bytes),
               heap_baseline_mb: mb(adaptive.heap_baseline_bytes),
