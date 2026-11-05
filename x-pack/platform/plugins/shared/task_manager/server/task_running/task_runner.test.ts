@@ -4491,12 +4491,111 @@ describe('TaskManagerRunner', () => {
     });
   });
 
+  describe('Memory estimates', () => {
+    const MB = 1024 * 1024;
+    const observation = { bytes: 40 * MB, instanceBytes: 42 * MB, samples: 3 };
+    const definitions = {
+      bar: {
+        title: 'Bar!',
+        createTaskRunner: () => ({
+          async run() {
+            return { state: {} };
+          },
+        }),
+      },
+    };
+
+    test('writes the estimate of a recurring run into the reschedule update and the task-run event', async () => {
+      const observeRunEnd = jest.fn().mockReturnValue(observation);
+      const { runner, store, instance } = await readyToRunStageSetup({
+        instance: { schedule: { interval: '10m' } },
+        definitions,
+        observeRunEnd,
+      });
+
+      await runner.run();
+
+      expect(observeRunEnd).toHaveBeenCalledWith({
+        executionId: runner.taskExecutionId,
+        taskId: instance.id,
+        taskType: 'bar',
+        cost: 2,
+      });
+      expect(store.partialUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          memoryEstimate: { bytes: 42 * MB, samples: 3, updatedAt: expect.any(String) },
+        }),
+        expect.anything()
+      );
+      expect(eventLoggerMock.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({ action: 'task-run' }),
+          kibana: { task: expect.objectContaining({ memory_bytes: 40 * MB }) },
+        })
+      );
+    });
+
+    test('keeps the estimate out of the update when persistence is off', async () => {
+      const observeRunEnd = jest.fn().mockReturnValue(observation);
+      const { runner, store } = await readyToRunStageSetup({
+        instance: { schedule: { interval: '10m' } },
+        definitions,
+        observeRunEnd,
+        config: {
+          adaptive_capacity: { ...configMock.create().adaptive_capacity, persist_estimates: false },
+        },
+      });
+
+      await runner.run();
+
+      expect(store.partialUpdate).toHaveBeenCalledTimes(1);
+      expect(store.partialUpdate.mock.calls[0][0]).not.toHaveProperty('memoryEstimate');
+      expect(eventLoggerMock.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({ action: 'task-run' }),
+          kibana: { task: expect.objectContaining({ memory_bytes: 40 * MB }) },
+        })
+      );
+    });
+
+    test('removes a one-off task without writing an estimate', async () => {
+      const observeRunEnd = jest.fn().mockReturnValue(observation);
+      const { runner, store } = await readyToRunStageSetup({ definitions, observeRunEnd });
+
+      await runner.run();
+
+      expect(observeRunEnd).toHaveBeenCalledTimes(1);
+      expect(store.remove).toHaveBeenCalledTimes(1);
+      expect(store.partialUpdate).not.toHaveBeenCalled();
+    });
+
+    test('changes nothing without adaptive capacity', async () => {
+      const logEvent = eventLoggerMock.logEvent as jest.Mock;
+      logEvent.mockClear();
+      const { runner, store } = await readyToRunStageSetup({
+        instance: { schedule: { interval: '10m' } },
+        definitions,
+      });
+
+      await runner.run();
+
+      expect(store.partialUpdate).toHaveBeenCalledTimes(1);
+      expect(store.partialUpdate.mock.calls[0][0]).not.toHaveProperty('memoryEstimate');
+      const taskRunEvent = logEvent.mock.calls
+        .map(([event]) => event as { event?: { action?: string }; kibana?: { task?: object } })
+        .find((event) => event.event?.action === 'task-run');
+      expect(taskRunEvent?.kibana?.task).not.toHaveProperty('memory_bytes');
+    });
+  });
+
   interface TestOpts {
     instance?: Partial<ConcreteTaskInstance>;
     definitions?: TaskDefinitionRegistry;
     onTaskEvent?: jest.Mock<(event: TaskEvent<unknown, unknown>) => void>;
     allowReadingInvalidState?: boolean;
     enrichFakeRequest?: jest.Mock;
+    observeRunEnd?: jest.Mock;
+    config?: Parameters<typeof configMock.create>[0];
   }
 
   function withAnyTiming(taskRun: TaskRun) {
@@ -4571,12 +4670,14 @@ describe('TaskManagerRunner', () => {
           monitor: true,
           warn_threshold: 5000,
         },
+        ...opts.config,
       }),
       allowReadingInvalidState: opts.allowReadingInvalidState || false,
       getPollInterval: () => 500,
       apiKeyStrategy: new EsApiKeyStrategy(),
       eventLogger: eventLoggerMock,
       enrichFakeRequest: opts.enrichFakeRequest,
+      observeRunEnd: opts.observeRunEnd,
     });
 
     if (stage === TaskRunningStage.READY_TO_RUN) {

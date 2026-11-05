@@ -172,8 +172,14 @@ async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershi
   let capacityAccumulator = 0;
   let memoryAccumulator = 0;
   let memoryLimited = 0;
+  let seeded = 0;
   for (const task of candidateTasks) {
     const taskCost = getTaskCost(task, definitions);
+    // A document written by any node that ran this task before carries its estimate,
+    // so a fresh node budgets it from history instead of the cold-start default.
+    if (memoryGate && task.memoryEstimate) {
+      if (memoryGate.seed(task.id, task.taskType, taskCost, task.memoryEstimate)) seeded++;
+    }
     const taskBytes = memoryGate ? memoryGate.estimateBytes(task.id, task.taskType, taskCost) : 0;
     const fitsCapacity = capacityAccumulator + taskCost <= initialCapacity;
     // Light runs are bounded by capacity alone, so cheap work keeps flowing while
@@ -286,7 +292,7 @@ async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershi
         memoryGate.budgetBytes / (1024 * 1024)
       )} MB, planned: ${Math.round(
         memoryAccumulator / (1024 * 1024)
-      )} MB, heap limited: ${memoryLimited}`
+      )} MB, heap limited: ${memoryLimited}, seeded: ${seeded}`
     : '';
   const message = `task claimer claimed: ${fullTasksToRun.length}; stale: ${staleTasks.length}; conflicts: ${conflicts}; missing: ${missingTasks.length}; capacity reached: ${leftOverTasks.length}; updateErrors: ${bulkUpdateErrors}; getErrors: ${bulkGetErrors}; malformed data errors: ${tasksWithMalformedData.length}${memoryMessage}`;
   logger.debug(message);

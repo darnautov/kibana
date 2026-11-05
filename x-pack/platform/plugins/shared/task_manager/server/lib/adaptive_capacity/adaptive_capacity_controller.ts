@@ -13,7 +13,7 @@ import type { JsonObject } from '@kbn/utility-types';
 import { TaskCost } from '../../task';
 import type { ClaimMemoryGate } from '../../task_claimers';
 import type { RunningTaskSnapshot } from '../../task_pool';
-import type { TaskTypeMemoryEstimate } from './task_memory_estimator';
+import type { RunMemoryObservation, TaskTypeMemoryEstimate } from './task_memory_estimator';
 import { TaskMemoryEstimator } from './task_memory_estimator';
 
 export interface HeapStats {
@@ -36,6 +36,8 @@ export interface AdaptiveCapacitySettings {
   readonly lightTaskBytes: number;
   /** Normal-cost slots kept open for light runs while the heap budget is exhausted. */
   readonly lightTaskSlots: number;
+  /** Restore instance estimates from task documents at claim time; off ignores the attribute. */
+  readonly persistEstimates: boolean;
 }
 
 /** Subscribes to major garbage collections; returns the unsubscribe function. */
@@ -58,6 +60,8 @@ export interface AdaptiveCapacityState extends JsonObject {
   decisions: number;
   last_trigger: AdaptiveCapacityTrigger;
   estimates: TaskTypeMemoryEstimate[];
+  /** Instances first budgeted from the estimate on their document rather than a cold-start default. */
+  seeded_instances: number;
 }
 
 export interface AdaptiveCapacityControllerOpts {
@@ -209,17 +213,33 @@ export class AdaptiveCapacityController {
       lightTaskBytes: this.settings.lightTaskBytes,
       estimateBytes: (taskId, taskType, cost) =>
         this.estimator.estimateBytes(taskId, taskType, cost),
+      seed: (taskId, taskType, cost, estimate) =>
+        this.settings.persistEstimates &&
+        this.estimator.seed(taskId, taskType, cost, estimate.bytes, estimate.samples),
     };
   }
 
   /**
    * Closes out a run the moment the pool drops it, attributing the heap growth
-   * since the last sample to it and whatever else is still running.
+   * since the last sample to it and whatever else is still running. A run the
+   * runner already reported through `observeRunEnd()` is left alone.
    */
   public taskEnded(task: RunningTaskSnapshot): void {
+    if (this.estimator.isFinalized(task.executionId)) return;
     const { usedHeapBytes } = this.getHeapStats();
     this.estimator.sample(usedHeapBytes, [...this.getRunningTasks(), task]);
     this.estimator.taskEnded(task);
+  }
+
+  /**
+   * Closes out a run from inside the runner, before its document is updated,
+   * and returns the estimate to persist with it.
+   */
+  public observeRunEnd(task: RunningTaskSnapshot): RunMemoryObservation | undefined {
+    if (this.estimator.isFinalized(task.executionId)) return undefined;
+    const { usedHeapBytes } = this.getHeapStats();
+    this.estimator.sample(usedHeapBytes, [...this.getRunningTasks(), task]);
+    return this.estimator.finalizeRun(task);
   }
 
   /**
@@ -321,6 +341,7 @@ export class AdaptiveCapacityController {
       decisions: this.decisions,
       last_trigger: trigger,
       estimates: this.estimator.snapshot(),
+      seeded_instances: this.estimator.seededCount(),
     };
   }
 }

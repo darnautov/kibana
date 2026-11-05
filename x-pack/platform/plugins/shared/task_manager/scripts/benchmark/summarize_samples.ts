@@ -53,6 +53,9 @@ interface RunStats {
   readonly durationP99s: number;
   readonly pickupDelayP50s: number;
   readonly pickupDelayP99s: number;
+  /** Heap attributed per run by adaptive capacity (`kibana.task.memory_bytes`); 0 without it. */
+  readonly memoryP50Mb: number;
+  readonly memoryP99Mb: number;
 }
 
 interface Summary extends RunStats {
@@ -105,6 +108,7 @@ interface EventLogAggs {
   aggregations: {
     duration: { values: Record<string, number> };
     delay: { values: Record<string, number> };
+    memory: { values: Record<string, number | null> };
     outcome: { buckets: Array<{ key: string; doc_count: number }> };
   };
 }
@@ -145,6 +149,7 @@ const queryRuns = async (
       aggs: {
         duration: { percentiles: { field: 'event.duration', percents: [50, 99] } },
         delay: { percentiles: { field: 'kibana.task.schedule_delay', percents: [50, 99] } },
+        memory: { percentiles: { field: 'kibana.task.memory_bytes', percents: [50, 99] } },
         outcome: { terms: { field: 'event.outcome' } },
       },
     },
@@ -161,6 +166,8 @@ const queryRuns = async (
     durationP99s: pct(result.aggregations.duration.values, '99.0'),
     pickupDelayP50s: pct(result.aggregations.delay.values, '50.0'),
     pickupDelayP99s: pct(result.aggregations.delay.values, '99.0'),
+    memoryP50Mb: (result.aggregations.memory.values['50.0'] ?? 0) / 2 ** 20,
+    memoryP99Mb: (result.aggregations.memory.values['99.0'] ?? 0) / 2 ** 20,
   };
 };
 
@@ -219,6 +226,7 @@ const main = async (): Promise<void> => {
     'success',
     'dur p50/p99 s',
     'pickup p50/p99 s',
+    'run heap p50/p99 MB',
     'heap peak/limit MB',
     'ELU avg',
     'EL delay max ms',
@@ -235,6 +243,7 @@ const main = async (): Promise<void> => {
     `${(r.successRate * 100).toFixed(1)}%`,
     `${r.durationP50s.toFixed(2)}/${r.durationP99s.toFixed(2)}`,
     `${r.pickupDelayP50s.toFixed(2)}/${r.pickupDelayP99s.toFixed(2)}`,
+    `${r.memoryP50Mb.toFixed(1)}/${r.memoryP99Mb.toFixed(1)}`,
     `${r.heapPeakMb}/${r.heapLimitMb}`,
     r.eluAvg.toFixed(2),
     r.eventLoopDelayMaxMs.toFixed(0),

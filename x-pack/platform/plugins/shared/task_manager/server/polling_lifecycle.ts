@@ -224,6 +224,7 @@ export class TaskPollingLifecycle implements ITaskEventEmitter<TaskLifecycleEven
           maxIncreasePerDecision: adaptive.max_increase_per_decision,
           lightTaskBytes: adaptive.light_task_bytes,
           lightTaskSlots: adaptive.light_task_slots,
+          persistEstimates: adaptive.persist_estimates,
         },
         // The first decision runs in the controller's constructor, before the pool exists.
         getRunningTasks: () => (this.pool ? this.pool.getRunningTasks() : []),
@@ -501,6 +502,7 @@ export class TaskPollingLifecycle implements ITaskEventEmitter<TaskLifecycleEven
   };
 
   private createTaskRunnerForTask = (instance: ConcreteTaskInstance) => {
+    const { adaptiveCapacity } = this;
     return new TaskManagerRunner({
       logger: this.logger,
       instance,
@@ -517,6 +519,7 @@ export class TaskPollingLifecycle implements ITaskEventEmitter<TaskLifecycleEven
       apiKeyStrategy: this.apiKeyStrategy,
       eventLogger: this.eventLogger,
       enrichFakeRequest: this.enrichFakeRequest,
+      observeRunEnd: adaptiveCapacity ? (task) => adaptiveCapacity.observeRunEnd(task) : undefined,
     });
   };
 

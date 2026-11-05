@@ -36,6 +36,17 @@ export interface TaskTypeMemoryEstimate extends JsonObject {
 interface Estimate {
   bytesPerCostUnit: number;
   samples: number;
+  /** Restored from the task document; already scaled by the writer's live ratio and replaced by the first local observation. */
+  seeded?: boolean;
+}
+
+export interface RunMemoryObservation {
+  /** Heap attributed to the run that just ended, scaled by the live ratio. */
+  readonly bytes: number;
+  /** The instance's moving average per run after this observation, scaled by the live ratio. */
+  readonly instanceBytes: number;
+  /** Runs the instance average is built from. */
+  readonly samples: number;
 }
 
 interface TypeEstimate {
@@ -60,6 +71,7 @@ const DEFAULT_MAX_INSTANCES = 10_000;
 const DEFAULT_CALIBRATION_BYTES = 256 * 1024 * 1024;
 const MIN_LIVE_RATIO = 0.1;
 const DEFAULT_LIGHT_BYTES_PER_COST_UNIT = 0;
+const MAX_FINALIZED_RUNS = 10_000;
 
 /**
  * Learns how much heap each task needs from what the pool is running.
@@ -70,9 +82,10 @@ const DEFAULT_LIGHT_BYTES_PER_COST_UNIT = 0;
  * folded into a moving average for that task instance and another for its type.
  * Recurring tasks keep a stable id, so the instance average predicts the next
  * run of the same rule or workflow. Instances that have not run yet take the
- * heavy end (`slotPercentile`) of their type's recent runs rather than its
- * average: one type can hold a 230 KB rule and a 46 MB rule, and a few cheap
- * instances must not make an unseen expensive one look light. Heap released by
+ * cold-start default, or the heavy end (`slotPercentile`) of their type's
+ * recent runs when that is larger: one type can hold a 230 KB rule and a 46 MB
+ * rule, and cheap instances must never make an unseen expensive one look
+ * light, however many of them ran first. Heap released by
  * garbage collection is ignored, so the estimate
  * is an allocation footprint, which errs on the side of claiming less rather
  * than more. Free slots are sized from a high percentile of the recent runs, so
@@ -100,7 +113,10 @@ export class TaskMemoryEstimator {
   private readonly byInstance = new Map<string, Estimate>();
   private readonly byType = new Map<string, TypeEstimate>();
   private readonly inFlight = new Map<string, InFlightRun>();
+  /** Runs already finalised through `finalizeRun()`, so a later pool notification does not count them twice. */
+  private readonly finalized = new Set<string>();
   private readonly recent: number[] = [];
+  private seededInstances = 0;
   private lastUsedHeapBytes?: number;
   private lastLiveHeapBytes?: number;
   private allocatedGrowth = 0;
@@ -130,7 +146,7 @@ export class TaskMemoryEstimator {
   /** Records one heap sample together with the tasks that were running when it was taken. */
   public sample(usedHeapBytes: number, running: readonly RunningTaskSnapshot[]): void {
     for (const task of running) {
-      if (!this.inFlight.has(task.executionId)) {
+      if (!this.inFlight.has(task.executionId) && !this.finalized.has(task.executionId)) {
         this.inFlight.set(task.executionId, {
           taskId: task.taskId,
           taskType: task.taskType,
@@ -168,6 +184,7 @@ export class TaskMemoryEstimator {
    * look free.
    */
   public taskEnded(task: RunningTaskSnapshot): void {
+    if (this.finalized.has(task.executionId)) return;
     const run = this.inFlight.get(task.executionId) ?? {
       taskId: task.taskId,
       taskType: task.taskType,
@@ -176,6 +193,62 @@ export class TaskMemoryEstimator {
     };
     this.inFlight.delete(task.executionId);
     this.observe(run);
+  }
+
+  /**
+   * Finalises a run from inside the runner, before the task document is
+   * updated, and returns what was learned so it can be written to the document
+   * and the event log. A later `taskEnded()` for the same execution is a no-op.
+   */
+  public finalizeRun(task: RunningTaskSnapshot): RunMemoryObservation | undefined {
+    if (this.finalized.has(task.executionId)) return undefined;
+    this.taskEnded(task);
+    this.finalized.add(task.executionId);
+    if (this.finalized.size > MAX_FINALIZED_RUNS) {
+      const oldest = this.finalized.values().next().value;
+      if (oldest !== undefined) this.finalized.delete(oldest);
+    }
+    const instance = this.byInstance.get(task.taskId);
+    if (instance === undefined) return undefined;
+    const lastObserved = this.recent[this.recent.length - 1] ?? 0;
+    return {
+      bytes: Math.round(lastObserved * task.cost * this.ratio),
+      instanceBytes: Math.round(this.instanceBytesPerRun(instance, task.cost)),
+      samples: instance.samples,
+    };
+  }
+
+  /** Whether `finalizeRun()` already closed out this execution. */
+  public isFinalized(executionId: string): boolean {
+    return this.finalized.has(executionId);
+  }
+
+  /**
+   * Restores an instance estimate from its task document. Only an instance this
+   * node has not observed takes the seed; the type history is left alone so a
+   * restart does not replay stale runs into the type percentile.
+   */
+  public seed(
+    taskId: string,
+    taskType: string,
+    cost: number,
+    bytes: number,
+    samples: number
+  ): boolean {
+    if (this.byInstance.has(taskId) || cost <= 0 || !(bytes >= 0)) return false;
+    this.byInstance.set(taskId, {
+      bytesPerCostUnit: bytes / cost,
+      samples: Math.max(1, Math.floor(samples)),
+      seeded: true,
+    });
+    this.trimInstances();
+    this.seededInstances++;
+    return true;
+  }
+
+  /** Instances whose first estimate on this node came from their document. */
+  public seededCount(): number {
+    return this.seededInstances;
   }
 
   /**
@@ -201,12 +274,32 @@ export class TaskMemoryEstimator {
     return this.ratio;
   }
 
-  /** Estimated heap for one run of this task: its own history first, then the heavy end of its type, then the default. */
+  /**
+   * Estimated heap for one run of this task: its own history when it has one,
+   * otherwise the cold-start default, raised to the heavy end of its type when
+   * that is larger. The type history never lowers an unseen instance below the
+   * default: on a fresh node the cheap instances of a type run first, and for a
+   * while they are all the type has seen, so an estimate taken from them would
+   * admit every unseen heavy instance at once.
+   */
   public estimateBytes(taskId: string, taskType: string, cost: number): number {
-    const learned =
-      this.byInstance.get(taskId)?.bytesPerCostUnit ?? this.typeBytesPerCostUnit(taskType);
-    const perCostUnit = learned === undefined ? this.defaultBytesPerCostUnit : learned * this.ratio;
+    const instance = this.byInstance.get(taskId);
+    if (instance !== undefined) {
+      return (
+        Math.max(this.instanceBytesPerRun(instance, cost) / cost, this.minBytesPerCostUnit) * cost
+      );
+    }
+    const learned = this.typeBytesPerCostUnit(taskType);
+    const perCostUnit =
+      learned === undefined
+        ? this.defaultBytesPerCostUnit
+        : Math.max(learned * this.ratio, this.defaultBytesPerCostUnit);
     return Math.max(perCostUnit, this.minBytesPerCostUnit) * cost;
+  }
+
+  /** Bytes per run for an instance; a seeded value already carries the writer's live ratio. */
+  private instanceBytesPerRun(instance: Estimate, cost: number): number {
+    return instance.bytesPerCostUnit * cost * (instance.seeded ? 1 : this.ratio);
   }
 
   /** Heap per cost unit at the slot percentile of the recent heavy runs, used to size free slots. */
@@ -248,16 +341,25 @@ export class TaskMemoryEstimator {
     type.samples++;
     this.byType.set(run.taskType, type);
     this.fold(this.byInstance, run.taskId, observed);
-    if (this.byInstance.size > this.maxInstances) {
-      const oldest = this.byInstance.keys().next().value;
-      if (oldest !== undefined) this.byInstance.delete(oldest);
-    }
+    this.trimInstances();
     this.recent.push(observed);
     if (this.recent.length > this.windowSize) this.recent.shift();
   }
 
+  private trimInstances(): void {
+    if (this.byInstance.size > this.maxInstances) {
+      const oldest = this.byInstance.keys().next().value;
+      if (oldest !== undefined) this.byInstance.delete(oldest);
+    }
+  }
+
   private fold(estimates: Map<string, Estimate>, key: string, observed: number): void {
     const current = estimates.get(key);
+    if (current?.seeded) {
+      // The node's own observation replaces the document's value outright.
+      estimates.set(key, { bytesPerCostUnit: observed, samples: current.samples + 1 });
+      return;
+    }
     if (current) {
       current.bytesPerCostUnit =
         this.alpha * observed + (1 - this.alpha) * current.bytesPerCostUnit;

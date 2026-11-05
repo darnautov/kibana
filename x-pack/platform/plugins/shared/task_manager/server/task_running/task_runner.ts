@@ -49,6 +49,8 @@ import type {
   TaskRunAsContext,
   TaskTypeGroup,
 } from '../task';
+import type { RunningTaskSnapshot } from '../task_pool';
+import type { RunMemoryObservation } from '../lib/adaptive_capacity';
 import { isFailedRunResult, TaskStatus, TaskCost, getTaskCostFromInstance } from '../task';
 import type { TaskTypeDictionary } from '../task_type_dictionary';
 import {
@@ -145,6 +147,8 @@ type Opts = {
   apiKeyStrategy: ApiKeyStrategy;
   eventLogger: TaskEventLogger;
   enrichFakeRequest?: FakeRequestEnricher;
+  /** With adaptive capacity: closes out this run's heap attribution and returns the estimate to persist. */
+  observeRunEnd?: (task: RunningTaskSnapshot) => RunMemoryObservation | undefined;
 } & Pick<Middleware, 'beforeRun'>;
 
 export enum TaskRunResult {
@@ -206,7 +210,9 @@ export class TaskManagerRunner implements TaskRunner {
   private isCancelled = false;
   private scheduleAtRunStart?: IntervalSchedule | RruleSchedule;
   private readonly enrichFakeRequest?: FakeRequestEnricher;
+  private readonly observeRunEnd?: (task: RunningTaskSnapshot) => RunMemoryObservation | undefined;
   private taskRunEventCustomFields?: Record<string, unknown>;
+  private runMemory?: RunMemoryObservation;
 
   /**
    * Creates an instance of TaskManagerRunner.
@@ -234,6 +240,7 @@ export class TaskManagerRunner implements TaskRunner {
     apiKeyStrategy,
     eventLogger,
     enrichFakeRequest,
+    observeRunEnd,
   }: Opts) {
     this.instance = asPending(sanitizeInstance(instance));
     this.definitions = definitions;
@@ -255,6 +262,7 @@ export class TaskManagerRunner implements TaskRunner {
     this.apiKeyStrategy = apiKeyStrategy;
     this.eventLogger = eventLogger;
     this.enrichFakeRequest = enrichFakeRequest;
+    this.observeRunEnd = observeRunEnd;
   }
 
   /**
@@ -1010,6 +1018,7 @@ export class TaskManagerRunner implements TaskRunner {
           retryAt: null,
           ownerId: null,
           ...(shouldTaskBeDisabled ? { enabled: false } : {}),
+          ...this.memoryEstimateUpdate(),
         };
       }
 
@@ -1062,11 +1071,34 @@ export class TaskManagerRunner implements TaskRunner {
     return TaskRunResult.Success;
   }
 
+  /**
+   * The `memoryEstimate` attribute for the run-end update: the instance's average
+   * after this run, when adaptive capacity observed it and persistence is on.
+   */
+  private memoryEstimateUpdate(): Pick<PartialConcreteTaskInstance, 'memoryEstimate'> {
+    if (!this.runMemory || !this.config.adaptive_capacity.persist_estimates) return {};
+    return {
+      memoryEstimate: {
+        bytes: this.runMemory.instanceBytes,
+        samples: this.runMemory.samples,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
   private async processResult(
     result: Result<SuccessfulRunResult, FailedRunResult>,
     taskTiming: TaskTiming
   ): Promise<Result<SuccessfulRunResult, FailedRunResult>> {
     const { task } = this.instance;
+    // Close out the heap attribution now, while the run still counts as running,
+    // so the estimate can go into the same update that reschedules the task.
+    this.runMemory = this.observeRunEnd?.({
+      executionId: this.taskExecutionId,
+      taskId: this.id,
+      taskType: this.taskType,
+      cost: this.cost,
+    });
 
     const debugLogger = createWrappedLogger({ logger: this.logger, tags: [`metrics-debugger`] });
 
@@ -1343,6 +1375,7 @@ export class TaskManagerRunner implements TaskRunner {
           scheduled: task.scheduledAt.toISOString(),
           schedule_delay: scheduleDelayNs,
           execution: { uuid: this.uuid },
+          ...(this.runMemory ? { memory_bytes: this.runMemory.bytes } : {}),
           ...(this.taskRunEventCustomFields ? { data: this.taskRunEventCustomFields } : {}),
         },
       },

@@ -156,6 +156,8 @@ export const configSchema = schema.object(
         max: MAX_CAPACITY,
         defaultValue: DEFAULT_ADAPTIVE_LIGHT_TASK_SLOTS,
       }),
+      /* Write each recurring task's heap estimate to its document and budget claims with it */
+      persist_estimates: schema.boolean({ defaultValue: true }),
     }),
     /* Lets `runSoon(..., { requestImmediateClaim: true })` request an extra claim cycle. */
     claim_nudge: schema.object({

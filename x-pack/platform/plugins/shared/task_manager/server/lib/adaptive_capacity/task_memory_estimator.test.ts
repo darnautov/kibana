@@ -36,8 +36,8 @@ describe('TaskMemoryEstimator', () => {
     // 100 MB growth split 4:1 by cost, then divided by cost -> 20 MB per cost unit each
     expect(estimator.estimateBytes('task-a', 'heavy', 4)).toBe(80 * MB);
     expect(estimator.estimateBytes('task-b', 'light', 1)).toBe(20 * MB);
-    // an unseen instance of a seen type falls back to the type estimate
-    expect(estimator.estimateBytes('task-new', 'heavy', 4)).toBe(80 * MB);
+    // an unseen instance of a seen type is never priced below the cold-start default
+    expect(estimator.estimateBytes('task-new', 'heavy', 4)).toBe(256 * MB);
     expect(estimator.snapshot()).toEqual([
       { task_type: 'heavy', bytes_per_cost_unit: 20 * MB, samples: 1 },
       { task_type: 'light', bytes_per_cost_unit: 20 * MB, samples: 1 },
@@ -66,7 +66,7 @@ describe('TaskMemoryEstimator', () => {
   });
 
   it('does not let cheap instances of a type make an unseen instance look light', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 4 * MB });
     estimator.sample(0, [run('heavy', 'rule')]);
     estimator.sample(100 * MB, [run('heavy', 'rule')]);
     estimator.sample(100 * MB, []); // heavy instance: 50 MB per cost unit
@@ -78,6 +78,20 @@ describe('TaskMemoryEstimator', () => {
     }
     expect(estimator.estimateBytes('task-light-0', 'rule', 2)).toBe(MB);
     expect(estimator.estimateBytes('task-unseen', 'rule', 2)).toBe(100 * MB);
+  });
+
+  it('prices an unseen instance at the default while only cheap instances of its type have run', () => {
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+    // a fresh node: the sixty light rules come due first and fill the type window
+    for (let i = 0; i < 40; i++) {
+      estimator.sample(100 * MB, [run(`light-${i}`, 'rule')]);
+      estimator.sample(101 * MB, [run(`light-${i}`, 'rule')]);
+      estimator.sample(101 * MB, []);
+      estimator.sample(100 * MB, []);
+    }
+    expect(estimator.estimateBytes('task-light-0', 'rule', 2)).toBe(MB);
+    // the type's heavy end is 0.5 MB per cost unit; an unseen rule still costs the default
+    expect(estimator.estimateBytes('task-unseen', 'rule', 2)).toBe(128 * MB);
   });
 
   it('sizes a slot from the heavy end of the recent mix', () => {
@@ -154,5 +168,55 @@ describe('TaskMemoryEstimator', () => {
     estimator.taskEnded(run('a', 't'));
     estimator.sample(50 * MB, []);
     expect(estimator.snapshot()[0].samples).toBe(1);
+  });
+
+  describe('persisted estimates', () => {
+    it('budgets a seeded instance by its document value and leaves the type history alone', () => {
+      const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+      expect(estimator.seed('task-x', 't', 2, 20 * MB, 3)).toBe(true);
+      expect(estimator.estimateBytes('task-x', 't', 2)).toBe(20 * MB);
+      expect(estimator.seededCount()).toBe(1);
+      // the seed is already live-ratio scaled by its writer, so calibration here must not touch it
+      estimator.liveSample(0);
+      estimator.sample(0, [run('z', 'other')]);
+      estimator.sample(400 * MB, [run('z', 'other')]);
+      estimator.sample(400 * MB, []);
+      estimator.liveSample(100 * MB);
+      expect(estimator.liveRatio()).toBeLessThan(1);
+      expect(estimator.estimateBytes('task-x', 't', 2)).toBe(20 * MB);
+      // an unseen sibling of the type still gets the cold-start default
+      expect(estimator.estimateBytes('task-y', 't', 2)).toBe(128 * MB);
+      // a second seed for a known instance is ignored
+      expect(estimator.seed('task-x', 't', 2, 90 * MB, 1)).toBe(false);
+      expect(estimator.estimateBytes('task-x', 't', 2)).toBe(20 * MB);
+    });
+
+    it('replaces a seed with the first local observation', () => {
+      const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+      estimator.seed('task-a', 't', 2, 20 * MB, 5);
+      estimator.sample(0, [run('a', 't')]);
+      estimator.sample(50 * MB, [run('a', 't')]);
+      estimator.sample(50 * MB, []);
+      expect(estimator.estimateBytes('task-a', 't', 2)).toBe(50 * MB);
+    });
+
+    it('finalises a run once and returns what was learned', () => {
+      const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+      estimator.sample(0, [run('a', 't')]);
+      estimator.sample(40 * MB, [run('a', 't')]);
+      expect(estimator.finalizeRun(run('a', 't'))).toEqual({
+        bytes: 40 * MB,
+        instanceBytes: 40 * MB,
+        samples: 1,
+      });
+      expect(estimator.isFinalized('a')).toBe(true);
+      expect(estimator.finalizeRun(run('a', 't'))).toBeUndefined();
+      // the pool's later notification and a sample that still lists the run do not count it again
+      estimator.taskEnded(run('a', 't'));
+      estimator.sample(60 * MB, [run('a', 't')]);
+      estimator.sample(60 * MB, []);
+      expect(estimator.snapshot()[0].samples).toBe(1);
+      expect(estimator.estimateBytes('task-a', 't', 2)).toBe(40 * MB);
+    });
   });
 });

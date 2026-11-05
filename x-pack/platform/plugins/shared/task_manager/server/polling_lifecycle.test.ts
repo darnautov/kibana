@@ -154,6 +154,7 @@ describe('TaskPollingLifecycle', () => {
         decision_interval: 1000,
         light_task_bytes: 8388608,
         light_task_slots: 10,
+        persist_estimates: true,
       },
       claim_nudge: {
         enabled: true,

@@ -33,6 +33,10 @@ exports.EcsCustomPropertyMappings = {
           schedule_delay: {
             type: 'long',
           },
+          // heap attributed to the run by Task Manager's adaptive capacity, in bytes
+          memory_bytes: {
+            type: 'long',
+          },
           execution: {
             properties: {
               uuid: {

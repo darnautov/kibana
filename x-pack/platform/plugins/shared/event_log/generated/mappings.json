@@ -256,6 +256,9 @@
                         "schedule_delay": {
                             "type": "long"
                         },
+                        "memory_bytes": {
+                            "type": "long"
+                        },
                         "execution": {
                             "properties": {
                                 "uuid": {

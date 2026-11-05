@@ -13,7 +13,7 @@ import type { TaskStore } from '../task_store';
 import type { TaskClaim, TaskTiming } from '../task_events';
 import type { TaskTypeDictionary } from '../task_type_dictionary';
 import type { TaskClaimingBatches } from '../queries/task_claiming';
-import type { ConcreteTaskInstance } from '../task';
+import type { ConcreteTaskInstance, TaskMemoryEstimate } from '../task';
 import { claimAvailableTasksMget } from './strategy_mget';
 import { CLAIM_STRATEGY_MGET } from '../config';
 import type { TaskPartitioner } from '../lib/task_partitioner';
@@ -27,6 +27,8 @@ export interface ClaimMemoryGate {
   /** Runs estimated at or below this are admitted against capacity only. */
   lightTaskBytes: number;
   estimateBytes: (taskId: string, taskType: string, cost: number) => number;
+  /** Restores an instance estimate from its document; true when the instance was unknown and took it. */
+  seed: (taskId: string, taskType: string, cost: number, estimate: TaskMemoryEstimate) => boolean;
 }
 
 export interface TaskClaimerOpts {

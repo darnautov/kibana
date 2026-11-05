@@ -52,6 +52,7 @@ interface AdaptiveCapacityHealth {
   decisions?: number;
   last_trigger?: string;
   estimates?: Array<{ task_type: string; bytes_per_cost_unit: number; samples: number }>;
+  seeded_instances?: number;
 }
 
 interface HealthResponse {
@@ -160,6 +161,7 @@ const main = async (): Promise<void> => {
               running_cost: adaptive.running_cost,
               free_slots: adaptive.free_slots,
               decisions: adaptive.decisions,
+              seeded_instances: adaptive.seeded_instances,
               estimates: adaptive.estimates,
             }
           : undefined,

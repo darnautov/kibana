@@ -21,6 +21,7 @@ const settings = {
   maxIncreasePerDecision: 5,
   lightTaskBytes: 0,
   lightTaskSlots: 0,
+  persistEstimates: true,
 };
 
 const task = (executionId: string, taskType = 't', cost = 2): RunningTaskSnapshot => ({
@@ -58,6 +59,50 @@ const setup = (
 };
 
 describe('AdaptiveCapacityController', () => {
+  it('reports a run from the runner once and ignores the pool notification that follows', () => {
+    const { controller, setHeap, setRunning } = setup();
+    setRunning([task('a')]);
+    controller.tick();
+    setHeap(1100);
+    expect(controller.observeRunEnd(task('a'))).toEqual({
+      bytes: 100 * MB,
+      instanceBytes: 100 * MB,
+      samples: 1,
+    });
+    setRunning([]);
+    setHeap(1150);
+    controller.taskEnded(task('a'));
+    expect(controller.observeRunEnd(task('a'))).toBeUndefined();
+    controller.refresh('tick');
+    expect(controller.state.estimates[0]).toEqual({
+      task_type: 't',
+      bytes_per_cost_unit: 50 * MB,
+      samples: 1,
+    });
+  });
+
+  it('seeds the claim gate from a document estimate and counts it in the state', () => {
+    const { controller } = setup();
+    const gate = controller.memoryGate();
+    const estimate = { bytes: 30 * MB, samples: 2, updatedAt: '2026-11-05T00:00:00.000Z' };
+    expect(gate.seed('task-x', 't', 2, estimate)).toBe(true);
+    expect(gate.seed('task-x', 't', 2, estimate)).toBe(false);
+    expect(gate.estimateBytes('task-x', 't', 2)).toBe(30 * MB);
+    controller.refresh('tick');
+    expect(controller.state.seeded_instances).toBe(1);
+  });
+
+  it('ignores document estimates when persistence is switched off', () => {
+    const { controller } = setup({ settings: { persistEstimates: false } });
+    const gate = controller.memoryGate();
+    const estimate = { bytes: 30 * MB, samples: 2, updatedAt: '2026-11-05T00:00:00.000Z' };
+    expect(gate.seed('task-x', 't', 2, estimate)).toBe(false);
+    // the cold-start default applies, as if the document carried nothing
+    expect(gate.estimateBytes('task-x', 't', 2)).toBe(100 * MB);
+    controller.refresh('tick');
+    expect(controller.state.seeded_instances).toBe(0);
+  });
+
   it('starts from the minimum and steps up by at most maxIncreasePerDecision', () => {
     const { controller } = setup();
     // budget 536 MB / 100 MB per task = 5 free slots, capped by +5 per decision from min 2

@@ -437,6 +437,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 150 * MB,
           lightTaskBytes: 0,
+          seed: () => false,
           estimateBytes: () => 60 * MB,
         }),
         taskPartitioner,
@@ -448,7 +449,7 @@ describe('TaskClaiming', () => {
       const result = unwrap(resultOrErr) as ClaimOwnershipResult;
 
       expect(taskManagerLogger.debug).toHaveBeenCalledWith(
-        'task claimer claimed: 2; stale: 0; conflicts: 0; missing: 0; capacity reached: 2; updateErrors: 0; getErrors: 0; malformed data errors: 0; heap budget: 150 MB, planned: 120 MB, heap limited: 2',
+        'task claimer claimed: 2; stale: 0; conflicts: 0; missing: 0; capacity reached: 2; updateErrors: 0; getErrors: 0; malformed data errors: 0; heap budget: 150 MB, planned: 120 MB, heap limited: 2, seeded: 0',
         { tags: ['taskClaiming', 'claimAvailableTasksMget'] }
       );
       expect(store.bulkPartialUpdate.mock.calls[0][0].map((task) => task.id)).toEqual([
@@ -488,6 +489,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 100 * MB,
           lightTaskBytes: 8 * MB,
+          seed: () => false,
           estimateBytes: (id) => (id.startsWith('heavy') ? 120 * MB : MB),
         }),
         taskPartitioner,
@@ -504,6 +506,70 @@ describe('TaskClaiming', () => {
         'light-2',
       ]);
       expect(result.stats).toMatchObject({ tasksClaimed: 2, tasksLeftUnclaimed: 2 });
+    });
+
+    test('should budget candidates from the estimate on their documents', async () => {
+      const store = taskStoreMock.create({ taskManagerId: 'test-test' });
+      store.convertToSavedObjectIds.mockImplementation((ids) => ids.map((id) => `task:${id}`));
+
+      const MB = 1024 * 1024;
+      const updatedAt = '2026-11-05T00:00:00.000Z';
+      const fetchedTasks = [
+        mockInstance({
+          id: `heavy-1`,
+          taskType: 'report',
+          memoryEstimate: { bytes: 120 * MB, samples: 3, updatedAt },
+        }),
+        mockInstance({
+          id: `light-1`,
+          taskType: 'report',
+          memoryEstimate: { bytes: MB, samples: 3, updatedAt },
+        }),
+        mockInstance({ id: `unknown-1`, taskType: 'report' }),
+      ];
+
+      const { versionMap, docLatestVersions } = getVersionMapsFromTasks(fetchedTasks);
+      store.msearch.mockResolvedValueOnce({ docs: fetchedTasks, versionMap });
+      store.getDocVersions.mockResolvedValueOnce(docLatestVersions);
+      const admitted = [fetchedTasks[1]];
+      store.bulkGet.mockResolvedValueOnce(admitted.map(asOk));
+      store.bulkPartialUpdate.mockResolvedValueOnce(admitted.map(getPartialUpdateResult));
+
+      const seeded = new Map<string, number>();
+      const taskClaiming = new TaskClaiming({
+        logger: taskManagerLogger,
+        strategy: CLAIM_STRATEGY_MGET,
+        definitions: taskDefinitions,
+        taskStore: store,
+        excludedTaskTypes: [],
+        maxAttempts: 2,
+        getAvailableCapacity: () => 10,
+        getMemoryGate: () => ({
+          budgetBytes: 100 * MB,
+          lightTaskBytes: 8 * MB,
+          seed: (id, _type, _cost, estimate) => {
+            seeded.set(id, estimate.bytes);
+            return true;
+          },
+          // an instance without a seed is priced at the cold-start default
+          estimateBytes: (id) => seeded.get(id) ?? 128 * MB,
+        }),
+        taskPartitioner,
+      });
+
+      const result = unwrap(
+        await taskClaiming.claimAvailableTasksIfCapacityIsAvailable({
+          claimOwnershipUntil: new Date(),
+        })
+      ) as ClaimOwnershipResult;
+
+      expect([...seeded.keys()]).toEqual(['heavy-1', 'light-1']);
+      expect(store.bulkPartialUpdate.mock.calls[0][0].map((task) => task.id)).toEqual(['light-1']);
+      expect(result.stats).toMatchObject({ tasksClaimed: 1, tasksLeftUnclaimed: 2 });
+      expect(taskManagerLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('heap limited: 2, seeded: 2'),
+        expect.anything()
+      );
     });
 
     test('should admit no heavy task when the heap budget is exhausted', async () => {
@@ -528,6 +594,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 0,
           lightTaskBytes: 0,
+          seed: () => false,
           estimateBytes: () => 500 * 1024 * 1024,
         }),
         taskPartitioner,
@@ -563,6 +630,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 100 * 1024 * 1024,
           lightTaskBytes: 0,
+          seed: () => false,
           estimateBytes: () => 500 * 1024 * 1024,
         }),
         taskPartitioner,

@@ -18,4 +18,4 @@ export type {
   HeapStats,
 } from './adaptive_capacity_controller';
 export { TaskMemoryEstimator } from './task_memory_estimator';
-export type { TaskTypeMemoryEstimate } from './task_memory_estimator';
+export type { RunMemoryObservation, TaskTypeMemoryEstimate } from './task_memory_estimator';

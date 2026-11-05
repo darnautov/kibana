@@ -754,6 +754,11 @@ export interface ConcreteTaskInstance extends Omit<TaskInstance, 'runAs'> {
   partition?: number;
 
   /**
+   * Heap estimate from this task's previous runs, maintained by Task Manager with adaptive capacity.
+   */
+  memoryEstimate?: TaskMemoryEstimate;
+
+  /**
    * How the task authenticates when it runs. Part of the AAD, so it is only written when the task is created.
    */
   credential?: TaskCredential;
@@ -768,6 +773,19 @@ export interface ConcreteTaskInstance extends Omit<TaskInstance, 'runAs'> {
 export type PartialConcreteTaskInstance = Partial<ConcreteTaskInstance> & {
   id: ConcreteTaskInstance['id'];
 };
+
+/**
+ * Heap one run of a recurring task is expected to need, written by the node that last ran it so
+ * that any node, including one that just started, can budget the next run from history.
+ */
+export interface TaskMemoryEstimate {
+  /** Moving average of the heap attributed to this task's runs, in bytes. */
+  bytes: number;
+  /** Runs the average is built from. */
+  samples: number;
+  /** When the average was last updated, ISO 8601. */
+  updatedAt: string;
+}
 
 /**
  * A task as returned by the claim candidate search, carrying only the metadata the claim

@@ -21,6 +21,7 @@ describe('config validation', () => {
           "max_capacity": 50,
           "max_increase_per_decision": 5,
           "min_capacity": 5,
+          "persist_estimates": true,
         },
         "allow_reading_invalid_state": true,
         "api_key_type": "es",
@@ -101,6 +102,7 @@ describe('config validation', () => {
           "max_capacity": 50,
           "max_increase_per_decision": 5,
           "min_capacity": 5,
+          "persist_estimates": true,
         },
         "allow_reading_invalid_state": true,
         "api_key_type": "es",
@@ -179,6 +181,7 @@ describe('config validation', () => {
           "max_capacity": 50,
           "max_increase_per_decision": 5,
           "min_capacity": 5,
+          "persist_estimates": true,
         },
         "allow_reading_invalid_state": true,
         "api_key_type": "es",
@@ -379,6 +382,7 @@ describe('config validation', () => {
       decision_interval: 1000,
       light_task_bytes: 8388608,
       light_task_slots: 10,
+      persist_estimates: true,
     });
     expect(() =>
       configSchema.validate({ adaptive_capacity: { min_capacity: 30, max_capacity: 20 } })
