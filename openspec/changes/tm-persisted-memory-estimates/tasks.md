@@ -25,5 +25,5 @@
 
 ## 5. Evidence
 
-- [ ] 5.1 Benchmark: cold restart of one `auto` background node at 1280 MB against the mixed workload with all tasks overdue, `persist_estimates` off then on (same build), three minutes each; report minutes to steady overdue count, light and heavy pickup p99 in minute 1, heap peak and heap-limited candidates from the claim log. Results in the On Week write-up (vault) and the OpenSpec change.
+- [x] 5.1 Benchmark: cold restart of one `auto` background node at 1280 MB against the mixed workload with all 100 tasks overdue, four minutes per leg (`bench/multi/cold_start.sh`, `cold_start_stats.py`, chart `10_cold_start_backlog.png`). Done 2026-11-05: backlog served 50 % / 90 % / all at 87 / 115 / 131 s on a first start with nothing on the documents, 22 / 67 / 83 s on a restart with `persist_estimates: false` (0 seeded, nothing written), 2 / 11 / 23 s on a restart with persisted estimates (112 seeded). Heavy pickup p99 in the first minute: backlog vs 48 s; light runs in the first minute 0 vs 705; heap peak 983 / 1052 / 1055 MB; 100 % success in all legs. The first kill-switch leg came back seeded (the switch only guarded the write): fixed in the controller and rerun on a rebuilt node.
 - [x] 5.2 `scripts/benchmark/summarize_samples.ts`: bytes p50/p99 per task type from `kibana.task.memory_bytes`.
