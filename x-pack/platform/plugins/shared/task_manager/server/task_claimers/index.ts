@@ -26,6 +26,12 @@ export interface ClaimMemoryGate {
   budgetBytes: number;
   /** Runs estimated at or below this are admitted against capacity only. */
   lightTaskBytes: number;
+  /**
+   * Whether a candidate is light: its whole estimate, buffers outside the heap
+   * included, is at or below `lightTaskBytes`. Absent, the budget-priced
+   * estimate is compared instead.
+   */
+  isLight?: (taskId: string, taskType: string, cost: number) => boolean;
   /** Bytes the running tasks have reserved beyond their estimates, already taken off the budget. */
   reservedBytes: number;
   estimateBytes: (taskId: string, taskType: string, cost: number) => number;

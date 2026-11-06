@@ -277,6 +277,8 @@ export class AdaptiveCapacityController {
     return {
       budgetBytes: Math.max(0, budgetBytes),
       lightTaskBytes: this.settings.lightTaskBytes,
+      isLight: (taskId, taskType, cost) =>
+        this.estimator.estimateBytes(taskId, taskType, cost) <= this.settings.lightTaskBytes,
       reservedBytes: reservations.bytes,
       estimateBytes: (taskId, taskType, cost) =>
         source === 'memory'

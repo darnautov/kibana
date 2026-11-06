@@ -291,6 +291,24 @@ describe('AdaptiveCapacityController', () => {
       expect(controller.estimator.estimateHeapBytes('task-a', 't', 2)).toBe(100 * MB);
     });
 
+    it('never calls a run light for a small heap share when its whole estimate is heavy', () => {
+      const { controller, setHeap, setExternal, setRunning } = setup({
+        settings: { lightTaskBytes: 8 * MB },
+      });
+      setRunning([task('a')]);
+      controller.tick();
+      setHeap(1004);
+      setExternal(40);
+      controller.observeRunEnd(task('a'));
+      setRunning([]);
+      controller.refresh('tick');
+      const gate = controller.memoryGate();
+      // 4 MB of heap would pass the light threshold; the 44 MB run as a whole does not.
+      expect(gate.estimateBytes('task-a', 't', 2)).toBe(4 * MB);
+      expect(gate.isLight?.('task-a', 't', 2)).toBe(false);
+      expect(gate.isLight?.('task-unseen-light', 'light-type', 2)).toBe(false);
+    });
+
     it('leaves the heap budget alone when only external memory grows and no limit is known', () => {
       const { controller, setExternal } = setup();
       controller.tick();

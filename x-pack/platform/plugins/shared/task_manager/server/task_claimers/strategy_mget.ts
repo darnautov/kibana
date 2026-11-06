@@ -188,7 +188,13 @@ async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershi
     // fit waits, and gets its turn as soon as the pool drains enough. A run that
     // would not fit an idle node at all is never admitted: on a small heap that
     // is the difference between a visible backlog and a process that dies.
-    const isLight = memoryGate !== undefined && taskBytes <= memoryGate.lightTaskBytes;
+    // Light means cheap as a whole: a run that streams 40 MB through buffers
+    // outside the heap is not light however small its heap share.
+    const isLight =
+      memoryGate !== undefined &&
+      (memoryGate.isLight
+        ? memoryGate.isLight(task.id, task.taskType, taskCost)
+        : taskBytes <= memoryGate.lightTaskBytes);
     const fitsMemory =
       !memoryGate || isLight || memoryAccumulator + taskBytes <= memoryGate.budgetBytes;
     if (fitsCapacity && fitsMemory) {
