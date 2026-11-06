@@ -35,7 +35,13 @@ In adaptive mode, a claim cycle SHALL budget each candidate that carries `memory
 
 ### Requirement: Unseen instances are never priced below the cold-start default
 
-An instance with no history of its own (neither observed on this node nor carried by its document) SHALL be budgeted at `adaptive_capacity.default_bytes_per_task` or at the heavy end of its type's recent runs, whichever is larger. The type history SHALL NOT lower an unseen instance's estimate below the default.
+An instance with no history of its own (neither observed on this node nor carried by its document) SHALL be budgeted at `adaptive_capacity.default_bytes_per_task` or at the heavy end of its type's recent runs, whichever is larger. The type history SHALL NOT lower an unseen instance's estimate below the default. The default SHALL apply per run regardless of the task's `cost`: cost describes CPU and Elasticsearch load, and scaling the default by it would price an ExtraLarge task above a small node's idle budget, so it would never run and never be learned.
+
+#### Scenario: an unseen ExtraLarge task is priced at the default
+
+- **GIVEN** `default_bytes_per_task` is 128 MB and no `siem.indicatorRule` task has run on this node
+- **WHEN** an indicator match rule (cost 10) is a claim candidate
+- **THEN** it is budgeted at 128 MB, not 640 MB, and fits the idle budget of a 1280 MB node
 
 #### Scenario: first start with the cheap rules due first
 

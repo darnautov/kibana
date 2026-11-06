@@ -166,7 +166,7 @@ export class AdaptiveCapacityController {
     this.estimator =
       estimator ??
       new TaskMemoryEstimator({
-        defaultBytesPerCostUnit: settings.defaultBytesPerTask / TaskCost.Normal,
+        defaultBytesPerTask: settings.defaultBytesPerTask,
         lightBytesPerCostUnit: settings.lightTaskBytes / TaskCost.Normal,
       });
     this.stopGcObserver = observeMajorGc(() => {

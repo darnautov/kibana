@@ -7,10 +7,16 @@
 
 import type { JsonObject } from '@kbn/utility-types';
 import type { RunningTaskSnapshot } from '../../task_pool';
+import { TaskCost } from '../../task';
 
 export interface TaskMemoryEstimatorOpts {
-  /** Estimate used for a task that has never been observed, per cost unit. */
-  readonly defaultBytesPerCostUnit: number;
+  /**
+   * Estimate for a task that has never been observed, per run. Flat on purpose:
+   * `cost` describes CPU and Elasticsearch load, not heap, and pricing an
+   * ExtraLarge task at ten times the default would keep it out of a small
+   * node's budget until it ran, which it then never would.
+   */
+  readonly defaultBytesPerTask: number;
   /** Lower bound for any estimate, per cost unit. */
   readonly minBytesPerCostUnit?: number;
   /** Weight of the newest observation in the moving averages (0..1). */
@@ -102,7 +108,7 @@ const MAX_FINALIZED_RUNS = 10_000;
  * the budget closer to what the runs actually occupy at once.
  */
 export class TaskMemoryEstimator {
-  private readonly defaultBytesPerCostUnit: number;
+  private readonly defaultBytesPerTask: number;
   private readonly minBytesPerCostUnit: number;
   private readonly alpha: number;
   private readonly slotPercentile: number;
@@ -124,7 +130,7 @@ export class TaskMemoryEstimator {
   private ratio = 1;
 
   constructor({
-    defaultBytesPerCostUnit,
+    defaultBytesPerTask,
     minBytesPerCostUnit = DEFAULT_MIN_BYTES_PER_COST_UNIT,
     alpha = DEFAULT_ALPHA,
     slotPercentile = DEFAULT_SLOT_PERCENTILE,
@@ -133,7 +139,7 @@ export class TaskMemoryEstimator {
     calibrationBytes = DEFAULT_CALIBRATION_BYTES,
     lightBytesPerCostUnit = DEFAULT_LIGHT_BYTES_PER_COST_UNIT,
   }: TaskMemoryEstimatorOpts) {
-    this.defaultBytesPerCostUnit = defaultBytesPerCostUnit;
+    this.defaultBytesPerTask = defaultBytesPerTask;
     this.minBytesPerCostUnit = minBytesPerCostUnit;
     this.alpha = alpha;
     this.slotPercentile = slotPercentile;
@@ -290,11 +296,8 @@ export class TaskMemoryEstimator {
       );
     }
     const learned = this.typeBytesPerCostUnit(taskType);
-    const perCostUnit =
-      learned === undefined
-        ? this.defaultBytesPerCostUnit
-        : Math.max(learned * this.ratio, this.defaultBytesPerCostUnit);
-    return Math.max(perCostUnit, this.minBytesPerCostUnit) * cost;
+    const fromType = learned === undefined ? 0 : learned * this.ratio * cost;
+    return Math.max(fromType, this.defaultBytesPerTask, this.minBytesPerCostUnit * cost);
   }
 
   /** Bytes per run for an instance; a seeded value already carries the writer's live ratio. */
@@ -308,7 +311,7 @@ export class TaskMemoryEstimator {
       .map((bytes) => bytes * this.ratio)
       .filter((bytes) => bytes > this.lightBytesPerCostUnit);
     if (heavy.length === 0) {
-      return Math.max(this.defaultBytesPerCostUnit, this.minBytesPerCostUnit);
+      return Math.max(this.defaultBytesPerTask / TaskCost.Normal, this.minBytesPerCostUnit);
     }
     return Math.max(percentile(heavy, this.slotPercentile), this.minBytesPerCostUnit);
   }

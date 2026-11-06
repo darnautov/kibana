@@ -18,14 +18,31 @@ const run = (executionId: string, taskType: string, cost = 2, taskId = `task-${e
 
 describe('TaskMemoryEstimator', () => {
   it('uses the default for unobserved types', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
-    expect(estimator.estimateBytes('task-x', 'unknown', 2)).toBe(128 * MB);
-    expect(estimator.bytesPerCostUnit()).toBe(64 * MB);
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
+    expect(estimator.estimateBytes('task-x', 'unknown', 2)).toBe(64 * MB);
+    expect(estimator.bytesPerCostUnit()).toBe(32 * MB);
     expect(estimator.hasObservations()).toBe(false);
   });
 
+  it('prices an unseen task at the flat default whatever its cost', () => {
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
+    // Cost describes CPU and Elasticsearch load, so an ExtraLarge task is not ten defaults of heap.
+    expect(estimator.estimateBytes('tiny', 'tiny-type', 1)).toBe(64 * MB);
+    expect(estimator.estimateBytes('indicator', 'siem.indicatorRule', 10)).toBe(64 * MB);
+    // Once its type has history the per-cost-unit estimate applies again.
+    estimator.sample(0, []);
+    estimator.sample(0, [
+      { executionId: 'r1', taskId: 'seen', taskType: 'siem.indicatorRule', cost: 10 },
+    ]);
+    estimator.sample(100 * MB, [
+      { executionId: 'r1', taskId: 'seen', taskType: 'siem.indicatorRule', cost: 10 },
+    ]);
+    estimator.sample(100 * MB, []);
+    expect(estimator.estimateBytes('indicator', 'siem.indicatorRule', 10)).toBe(100 * MB);
+  });
+
   it('attributes heap growth to the running tasks by cost', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
     const heavy = run('a', 'heavy', 4);
     const light = run('b', 'light', 1);
     estimator.sample(1000 * MB, [heavy, light]);
@@ -37,7 +54,7 @@ describe('TaskMemoryEstimator', () => {
     expect(estimator.estimateBytes('task-a', 'heavy', 4)).toBe(80 * MB);
     expect(estimator.estimateBytes('task-b', 'light', 1)).toBe(20 * MB);
     // an unseen instance of a seen type is never priced below the cold-start default
-    expect(estimator.estimateBytes('task-new', 'heavy', 4)).toBe(256 * MB);
+    expect(estimator.estimateBytes('task-new', 'heavy', 4)).toBe(80 * MB);
     expect(estimator.snapshot()).toEqual([
       { task_type: 'heavy', bytes_per_cost_unit: 20 * MB, samples: 1 },
       { task_type: 'light', bytes_per_cost_unit: 20 * MB, samples: 1 },
@@ -45,7 +62,7 @@ describe('TaskMemoryEstimator', () => {
   });
 
   it('estimates unseen instances from the heavy end of their type', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB, alpha: 0.5 });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB, alpha: 0.5 });
     estimator.sample(0, [run('a', 't')]);
     estimator.sample(100 * MB, [run('a', 't')]);
     estimator.sample(100 * MB, []);
@@ -66,7 +83,7 @@ describe('TaskMemoryEstimator', () => {
   });
 
   it('does not let cheap instances of a type make an unseen instance look light', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 4 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 4 * MB });
     estimator.sample(0, [run('heavy', 'rule')]);
     estimator.sample(100 * MB, [run('heavy', 'rule')]);
     estimator.sample(100 * MB, []); // heavy instance: 50 MB per cost unit
@@ -81,7 +98,7 @@ describe('TaskMemoryEstimator', () => {
   });
 
   it('prices an unseen instance at the default while only cheap instances of its type have run', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
     // a fresh node: the sixty light rules come due first and fill the type window
     for (let i = 0; i < 40; i++) {
       estimator.sample(100 * MB, [run(`light-${i}`, 'rule')]);
@@ -91,11 +108,11 @@ describe('TaskMemoryEstimator', () => {
     }
     expect(estimator.estimateBytes('task-light-0', 'rule', 2)).toBe(MB);
     // the type's heavy end is 0.5 MB per cost unit; an unseen rule still costs the default
-    expect(estimator.estimateBytes('task-unseen', 'rule', 2)).toBe(128 * MB);
+    expect(estimator.estimateBytes('task-unseen', 'rule', 2)).toBe(64 * MB);
   });
 
   it('sizes a slot from the heavy end of the recent mix', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
     for (let i = 0; i < 9; i++) estimator.taskEnded(run(`cheap-${i}`, 'cheap', 1));
     estimator.sample(0, [run('heavy', 'heavy', 1)]);
     estimator.sample(30 * MB, [run('heavy', 'heavy', 1)]);
@@ -106,7 +123,7 @@ describe('TaskMemoryEstimator', () => {
 
   it('scales estimates by the live-to-allocated ratio once calibrated', () => {
     const estimator = new TaskMemoryEstimator({
-      defaultBytesPerCostUnit: 64 * MB,
+      defaultBytesPerTask: 64 * MB,
       calibrationBytes: 100 * MB,
       alpha: 1,
     });
@@ -127,7 +144,7 @@ describe('TaskMemoryEstimator', () => {
 
   it('sizes slots from heavy runs only, even when light runs dominate', () => {
     const estimator = new TaskMemoryEstimator({
-      defaultBytesPerCostUnit: 64 * MB,
+      defaultBytesPerTask: 64 * MB,
       lightBytesPerCostUnit: 4 * MB,
     });
     // 20 light runs at 1 MB and two heavy runs at 50 MB
@@ -144,16 +161,16 @@ describe('TaskMemoryEstimator', () => {
     expect(estimator.bytesPerCostUnit()).toBe(50 * MB);
     // with no heavy run observed yet the cold-start default applies
     const fresh = new TaskMemoryEstimator({
-      defaultBytesPerCostUnit: 64 * MB,
+      defaultBytesPerTask: 64 * MB,
       lightBytesPerCostUnit: 4 * MB,
     });
     fresh.taskEnded(run('l', 'light', 1));
-    expect(fresh.bytesPerCostUnit()).toBe(64 * MB);
+    expect(fresh.bytesPerCostUnit()).toBe(32 * MB);
   });
 
   it('records a run that ends between samples, clamped to the minimum', () => {
     const estimator = new TaskMemoryEstimator({
-      defaultBytesPerCostUnit: 64 * MB,
+      defaultBytesPerTask: 64 * MB,
       minBytesPerCostUnit: MB,
     });
     estimator.taskEnded(run('fast', 'tiny', 1));
@@ -162,7 +179,7 @@ describe('TaskMemoryEstimator', () => {
   });
 
   it('does not count a run twice when it ends and then leaves the sample', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
     estimator.sample(0, [run('a', 't')]);
     estimator.sample(50 * MB, [run('a', 't')]);
     estimator.taskEnded(run('a', 't'));
@@ -172,7 +189,7 @@ describe('TaskMemoryEstimator', () => {
 
   describe('persisted estimates', () => {
     it('budgets a seeded instance by its document value and leaves the type history alone', () => {
-      const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+      const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
       expect(estimator.seed('task-x', 't', 2, 20 * MB, 3)).toBe(true);
       expect(estimator.estimateBytes('task-x', 't', 2)).toBe(20 * MB);
       expect(estimator.seededCount()).toBe(1);
@@ -185,14 +202,14 @@ describe('TaskMemoryEstimator', () => {
       expect(estimator.liveRatio()).toBeLessThan(1);
       expect(estimator.estimateBytes('task-x', 't', 2)).toBe(20 * MB);
       // an unseen sibling of the type still gets the cold-start default
-      expect(estimator.estimateBytes('task-y', 't', 2)).toBe(128 * MB);
+      expect(estimator.estimateBytes('task-y', 't', 2)).toBe(64 * MB);
       // a second seed for a known instance is ignored
       expect(estimator.seed('task-x', 't', 2, 90 * MB, 1)).toBe(false);
       expect(estimator.estimateBytes('task-x', 't', 2)).toBe(20 * MB);
     });
 
     it('replaces a seed with the first local observation', () => {
-      const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+      const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
       estimator.seed('task-a', 't', 2, 20 * MB, 5);
       estimator.sample(0, [run('a', 't')]);
       estimator.sample(50 * MB, [run('a', 't')]);
@@ -201,7 +218,7 @@ describe('TaskMemoryEstimator', () => {
     });
 
     it('finalises a run once and returns what was learned', () => {
-      const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 64 * MB });
+      const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
       estimator.sample(0, [run('a', 't')]);
       estimator.sample(40 * MB, [run('a', 't')]);
       expect(estimator.finalizeRun(run('a', 't'))).toEqual({

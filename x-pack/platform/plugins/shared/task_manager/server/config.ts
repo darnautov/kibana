@@ -131,7 +131,7 @@ export const configSchema = schema.object(
         max: 0.95,
         defaultValue: DEFAULT_ADAPTIVE_HEAP_TARGET_RATIO,
       }),
-      /* Heap assumed for a normal-cost task of a type that has not run yet */
+      /* Heap assumed per run for a task of a type that has not run yet, whatever its cost */
       default_bytes_per_task: schema.number({
         min: 1024 * 1024,
         defaultValue: DEFAULT_ADAPTIVE_BYTES_PER_TASK,

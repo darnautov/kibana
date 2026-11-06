@@ -16,7 +16,7 @@ Rejected: a pure feedback loop (step +1 every 10 s while ELU/heap are under thre
 
 ### D3. Per-instance estimates with type fallback
 
-Heavy and light alerting rules share one task type. A per-type estimate is dragged to the floor by frequent light runs and then waves a heavy herd through. Estimates are therefore keyed by task instance id (bounded map, 10k entries, insertion-order eviction), fall back to the type average, then to `default_bytes_per_task` (128 MB) for cold start. The estimate is an allocation footprint (positive heap deltas only), which over-counts live memory by roughly 2× and errs toward claiming less. GC-aware measurement is the follow-up.
+Heavy and light alerting rules share one task type. A per-type estimate is dragged to the floor by frequent light runs and then waves a heavy herd through. Estimates are therefore keyed by task instance id (bounded map, 10k entries, insertion-order eviction), fall back to the type average, then to `default_bytes_per_task` (128 MB, flat per run and not scaled by `cost`, which measures CPU and Elasticsearch load rather than heap) for cold start. The estimate is an allocation footprint (positive heap deltas only), which over-counts live memory by roughly 2× and errs toward claiming less. GC-aware measurement is the follow-up.
 
 ### D4. Claims lower, the timer raises
 

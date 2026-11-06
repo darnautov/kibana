@@ -130,7 +130,7 @@ describe('AdaptiveCapacityController', () => {
   });
 
   it('uses learned per-type estimates and recovers once the heap is released', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 50 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 100 * MB });
     const { controller, setHeap, setRunning } = setup({ estimator });
     const tasks = [1, 2, 3, 4].map((i) => task(`${i}`, 'heavy'));
     setRunning(tasks);
@@ -155,7 +155,7 @@ describe('AdaptiveCapacityController', () => {
   });
 
   it('never exceeds maxCapacity and emits only on change', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 5 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 10 * MB });
     const { controller, setHeap } = setup({ estimator });
     const seen: number[] = [];
     controller.capacity$.subscribe((value) => seen.push(value));
@@ -167,7 +167,7 @@ describe('AdaptiveCapacityController', () => {
   });
 
   it('only lowers capacity at claim time and raises it on the timer', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 5 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 10 * MB });
     const { controller, setHeap } = setup({ estimator });
     const start = controller.state.capacity;
     setHeap(100);
@@ -178,7 +178,7 @@ describe('AdaptiveCapacityController', () => {
   });
 
   it('attributes the growth since the last sample to a run that ends between ticks', () => {
-    const estimator = new TaskMemoryEstimator({ defaultBytesPerCostUnit: 5 * MB });
+    const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 10 * MB });
     const { controller, setHeap, setRunning } = setup({ estimator });
     controller.tick();
     const fast = task('fast', 'quick', 1);
@@ -204,7 +204,7 @@ describe('AdaptiveCapacityController', () => {
 
   it('feeds post-GC heap samples to the estimator and stops observing on stop()', () => {
     const estimator = new TaskMemoryEstimator({
-      defaultBytesPerCostUnit: 50 * MB,
+      defaultBytesPerTask: 100 * MB,
       calibrationBytes: 100 * MB,
     });
     const { controller, setHeap, setRunning, majorGc, unobserve } = setup({ estimator });
