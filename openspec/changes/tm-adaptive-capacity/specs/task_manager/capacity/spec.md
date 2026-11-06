@@ -111,11 +111,34 @@ The background task utilization reported for autoscaling SHALL compute `load` ag
 - **WHEN** capacity is reduced by Elasticsearch 429 errors
 - **THEN** `es_backpressure_active` is true regardless of the heap-driven value
 
+### Requirement: Memory outside the V8 heap counts toward the budget
+
+In adaptive mode Task Manager SHALL include the memory V8 tracks outside its heap (Buffers, ArrayBuffers and other external allocations) in the bytes it samples, so that a task's learned estimate covers the buffers it holds outside the heap and the projected total counts them.
+
+#### Scenario: streaming task
+
+- **WHEN** a run decodes a 300 MB streamed response into ArrayBuffers while used heap grows by 6 MB
+- **THEN** the run's estimate reflects roughly 306 MB scaled by the live ratio, not 6 MB, and the budget for the next claim cycle is reduced accordingly
+
+### Requirement: The container memory limit bounds capacity
+
+When the process runs under a memory limit (the cgroup limit reported by Node, or `adaptive_capacity.memory_limit_bytes`), Task Manager SHALL keep a second budget of `memory_target_ratio × limit`, less the resident set size and the estimates of the running tasks, and SHALL admit candidates only within the smaller of the heap budget and the memory budget. Without a known limit the heap budget alone SHALL apply.
+
+#### Scenario: external memory fills the pod
+
+- **WHEN** the heap budget still has 400 MB free, the limit is 2 GiB, the resident set size is 1.9 GiB and the target ratio is 0.85
+- **THEN** the memory budget is zero and no heavy candidate is admitted until the resident set size falls
+
+#### Scenario: laptop without a limit
+
+- **WHEN** Node reports no constrained memory and `memory_limit_bytes` is unset
+- **THEN** capacity is computed from the heap budget exactly as before
+
 ## MODIFIED Requirements
 
 ### Requirement: Capacity is visible in the health endpoint
 
-`GET /api/task_manager/_health` SHALL report the capacity currently in effect under `stats.configuration.value.capacity` with `config`, `as_workers`, `as_cost` and `mode` (`fixed` or `auto`), and in adaptive mode SHALL report the latest decision under `stats.configuration.value.adaptive_capacity` (heap used, limit, target, baseline, projected and budget in bytes; bytes per normal task; running cost; free slots; decision count; last trigger; the ten largest per-type estimates). In fixed mode `adaptive_capacity` SHALL be `null`.
+`GET /api/task_manager/_health` SHALL report the capacity currently in effect under `stats.configuration.value.capacity` with `config`, `as_workers`, `as_cost` and `mode` (`fixed` or `auto`), and in adaptive mode SHALL report the latest decision under `stats.configuration.value.adaptive_capacity` (heap used, external, limit, target, baseline, projected and budget in bytes; resident set size, memory limit, target and budget in bytes when a limit is known; bytes per normal task; running cost; free slots; decision count; last trigger; the ten largest per-type estimates). In fixed mode `adaptive_capacity` SHALL be `null`.
 
 #### Scenario: health reflects a temporary reduction
 

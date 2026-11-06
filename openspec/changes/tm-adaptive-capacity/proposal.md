@@ -9,11 +9,13 @@
 - Gate admission at claim time: candidates are admitted while the sum of their estimates fits the heap budget; a candidate over budget is skipped for that cycle, not the whole cycle.
 - Expose every decision: `capacity.mode` and an `adaptive_capacity` block in `/api/task_manager/_health`, OpenTelemetry gauges, one debug log line per change.
 - Keep Elasticsearch-pressure backoff; it applies as a ratio on top of the heap-driven value.
+- Count memory outside the V8 heap (external allocations such as streamed Arrow responses) in the sampled bytes, and bound capacity by the container's memory limit when one is known, so a node is protected from the kernel kill as well as from V8's heap abort.
 - **Kill switch:** any numeric `capacity` keeps today's behaviour unchanged. Tuning lives under `xpack.task_manager.adaptive_capacity.*` and is ignored when capacity is a number.
 
 ## Out of scope
 
 - Per-task memory limits, isolation or quarantine of a single runaway task.
+- Letting a task report or reserve memory itself: change `tm-task-memory-reporting`.
 - Changing the ECH default-capacity table or Elastic Cloud autoscaling.
 - Making the health endpoint's `capacity_estimation` memory-aware (follow-up: heap-seconds model).
 - Serverless rollout; the controller is evaluated locally first.

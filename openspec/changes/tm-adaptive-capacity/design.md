@@ -42,10 +42,18 @@ On the mixed workload the capacity number sat at the floor during each heavy her
 
 The attribution counts allocation (positive heap deltas), which measured ~2× the live peak. A `PerformanceObserver` on V8 garbage-collection entries feeds the heap used right after each major collection to the estimator; the ratio of live growth to allocated growth over the same period (re-estimated every 256 MB of allocation, EWMA, floored at 0.1) scales every learned estimate and the slot size. Cold-start defaults are not scaled. The ratio is exposed as `heap_live_ratio` in health and as an OTel gauge. Rejected: forcing GC or `--expose-gc` (not available in production), and heap snapshots (far too expensive per decision).
 
+### D10. Memory outside the V8 heap counts
+
+Streaming responses (alerting v2 with the Arrow ES|QL format, and any task that holds Buffers or ArrayBuffers) allocate outside the V8 heap. On the Arrow leg of 2026-11-06 the heavy rules' run heap fell from 24 MB to 6 MB while the process grew ~340 MB in RSS that `used_heap_size` never showed; the controller saw spare budget it did not have. `v8.getHeapStatistics().external_memory` reports those bytes and V8 releases them with the owning objects at garbage collection, so the existing attribution by cost share and the post-GC live calibration apply unchanged: the sampled signal becomes `used_heap_size + external_memory` for the estimator, the baseline and the projection. Until D11 lands the sum is compared against the heap target, which over-reserves heap when external memory is high; that errs toward claiming less, the safe side. Rejected: `process.memoryUsage()` on every sample (it fills RSS from the kernel on each call, ~10× the cost of the V8 statistics); `process.memoryUsage.rss()` alone (RSS includes page cache and freed-but-unreturned pages, so it cannot be attributed to a run).
+
+### D11. The container limit is the second ceiling
+
+A background node dies in two ways: V8 aborts at the old-space cap, and the kernel kills the container at its cgroup limit. The heap budget guards the first only. Node exposes the cgroup limit as `process.constrainedMemory()` (0 when there is none, as on a laptop), so when a limit is known the controller keeps a second budget, `memory_target_ratio × limit − rss − Σ running estimates`, and admission takes the smaller of the heap and memory budgets. `adaptive_capacity.memory_limit_bytes` overrides the detected limit for local runs and for hosts where the limit is not visible to Node. Rejected: deriving the ceiling from the heap limit plus a fixed allowance (the kibana-controller sizes the heap at 80 % of the pod, but external memory is exactly the part that ratio does not cover); reading cgroup files directly (Linux-only and already what `constrainedMemory` does).
+
 ## Observability
 
-- `_health` → `stats.configuration.value.capacity.mode` (`fixed` | `auto`) and `adaptive_capacity` (heap used/limit/target/baseline/projected/budget, bytes per task, running cost, free slots, decisions, last trigger, top-10 per-type estimates).
-- OTel observable gauges under `kibana.task_manager.adaptive_capacity.*` (capacity, heap.budget, heap.projected, slot.memory, task_type.memory by `task.type`).
+- `_health` → `stats.configuration.value.capacity.mode` (`fixed` | `auto`) and `adaptive_capacity` (heap used/limit/target/baseline/projected/budget, bytes per task, running cost, free slots, decisions, last trigger, top-10 per-type estimates; with D10/D11 also external bytes, RSS, memory limit/target/budget).
+- OTel observable gauges under `kibana.task_manager.adaptive_capacity.*` (capacity, heap.budget, heap.projected, slot.memory, task_type.memory by `task.type`; with D10/D11 also heap.external, rss, memory.limit, memory.budget).
 - Debug log per capacity change with the full arithmetic; the claim debug line gains `heap budget / planned / heap limited`.
 
 ## Risks
