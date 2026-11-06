@@ -58,7 +58,7 @@ In adaptive mode, each claim cycle SHALL admit candidates while the sum of their
 
 ### Requirement: Light runs are bounded by capacity, not by the heap budget
 
-A candidate whose estimated heap is at or below `adaptive_capacity.light_task_bytes` SHALL be admitted against capacity alone and SHALL NOT consume the heap budget. While the heap budget is exhausted, adaptive capacity SHALL keep at least `adaptive_capacity.light_task_slots` normal-cost slots open beyond the running set, and SHALL NOT admit heavy candidates.
+A candidate whose whole estimated memory (heap and buffers outside it) is at or below `adaptive_capacity.light_task_bytes` SHALL be admitted against capacity alone and SHALL NOT consume the heap budget. While the heap budget is exhausted, adaptive capacity SHALL keep at least `adaptive_capacity.light_task_slots` normal-cost slots open beyond the running set, and SHALL NOT admit heavy candidates.
 
 #### Scenario: cheap rules during a heavy herd
 
