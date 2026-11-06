@@ -47,6 +47,7 @@ interface AdaptiveCapacityHealth {
   heap_budget_bytes?: number;
   heap_external_bytes?: number;
   budget_bytes?: number;
+  budget_source?: string;
   memory?: {
     limit_bytes?: number;
     target_bytes?: number;
@@ -168,6 +169,7 @@ const main = async (): Promise<void> => {
               heap_budget_mb: mb(adaptive.heap_budget_bytes),
               heap_external_mb: mb(adaptive.heap_external_bytes),
               budget_mb: mb(adaptive.budget_bytes),
+              budget_source: adaptive.budget_source,
               memory: adaptive.memory
                 ? {
                     limit_mb: mb(adaptive.memory.limit_bytes),

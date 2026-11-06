@@ -73,6 +73,8 @@ export interface AdaptiveCapacityState extends JsonObject {
   heap_budget_bytes: number;
   /** The budget claims are admitted against: the heap budget, or the memory budget when that is smaller. */
   budget_bytes: number;
+  /** Which budget `budget_bytes` is; candidates are priced by their heap or their whole estimate accordingly. */
+  budget_source: 'heap' | 'memory';
   memory: AdaptiveMemoryState | null;
   heap_live_ratio: number;
   bytes_per_normal_task: number;
@@ -221,9 +223,9 @@ export class AdaptiveCapacityController {
         lightBytesPerCostUnit: settings.lightTaskBytes / TaskCost.Normal,
       });
     this.stopGcObserver = observeMajorGc(() => {
-      const sampled = this.sampledBytes();
-      this.estimator.liveSample(sampled);
-      this.observeLiveBaseline(sampled);
+      const { usedHeapBytes, externalBytes } = this.getHeapStats();
+      this.estimator.liveSample(usedHeapBytes, externalBytes);
+      this.observeLiveBaseline(usedHeapBytes);
     });
     this.currentCapacity = settings.minCapacity;
     const initial = this.decide('tick');
@@ -247,14 +249,13 @@ export class AdaptiveCapacityController {
 
   /** Feeds the estimator one memory sample and makes a decision. */
   public tick(): number {
-    this.estimator.sample(this.sampledBytes(), this.getRunningTasks());
+    this.sampleEstimator(this.getRunningTasks());
     return this.refresh('tick');
   }
 
-  /** Heap plus external memory: the figure the estimates and the baseline are built from. */
-  private sampledBytes(): number {
+  private sampleEstimator(running: readonly RunningTaskSnapshot[]): void {
     const { usedHeapBytes, externalBytes } = this.getHeapStats();
-    return usedHeapBytes + externalBytes;
+    this.estimator.sample(usedHeapBytes, running, externalBytes);
   }
 
   /** Releases the garbage-collection observer. */
@@ -262,14 +263,25 @@ export class AdaptiveCapacityController {
     this.stopGcObserver();
   }
 
-  /** Memory budget for the claim that follows the latest decision. */
+  /**
+   * Memory budget for the claim that follows the latest decision. Candidates
+   * are priced by what the binding budget holds: their heap share against the
+   * heap budget, their whole estimate against the container budget.
+   */
   public memoryGate(): ClaimMemoryGate {
+    const {
+      budget_bytes: budgetBytes,
+      budget_source: source,
+      reservations,
+    } = this.stateSubject.value;
     return {
-      budgetBytes: Math.max(0, this.stateSubject.value.budget_bytes),
+      budgetBytes: Math.max(0, budgetBytes),
       lightTaskBytes: this.settings.lightTaskBytes,
-      reservedBytes: this.stateSubject.value.reservations.bytes,
+      reservedBytes: reservations.bytes,
       estimateBytes: (taskId, taskType, cost) =>
-        this.estimator.estimateBytes(taskId, taskType, cost),
+        source === 'memory'
+          ? this.estimator.estimateBytes(taskId, taskType, cost)
+          : this.estimator.estimateHeapBytes(taskId, taskType, cost),
       seed: (taskId, taskType, cost, estimate) =>
         this.settings.persistEstimates &&
         this.estimator.seed(taskId, taskType, cost, estimate.bytes, estimate.samples),
@@ -283,7 +295,7 @@ export class AdaptiveCapacityController {
    */
   public taskEnded(task: RunningTaskSnapshot): void {
     if (this.estimator.isFinalized(task.executionId)) return;
-    this.estimator.sample(this.sampledBytes(), [...this.getRunningTasks(), task]);
+    this.sampleEstimator([...this.getRunningTasks(), task]);
     this.estimator.taskEnded(task);
   }
 
@@ -297,7 +309,7 @@ export class AdaptiveCapacityController {
     reportedBytes?: number
   ): RunMemoryObservation | undefined {
     if (this.estimator.isFinalized(task.executionId)) return undefined;
-    this.estimator.sample(this.sampledBytes(), [...this.getRunningTasks(), task]);
+    this.sampleEstimator([...this.getRunningTasks(), task]);
     return this.estimator.finalizeRun(task, reportedBytes);
   }
 
@@ -307,15 +319,19 @@ export class AdaptiveCapacityController {
    * estimates off gives a baseline free of garbage that keeps tracking under
    * steady load, when the pool never empties.
    */
-  private observeLiveBaseline(liveBytes: number): void {
-    const committed = this.committedBytes(this.getRunningTasks());
+  private observeLiveBaseline(liveHeapBytes: number): void {
+    const running = this.getRunningTasks();
     const first = this.baselineBytes === undefined || !this.liveBaselineSeen;
-    this.baselineBytes = ewma(Math.max(0, liveBytes - committed), this.baselineBytes, first);
+    this.baselineBytes = ewma(
+      Math.max(0, liveHeapBytes - this.committedBytes(running, 'heap')),
+      this.baselineBytes,
+      first
+    );
     if (this.memoryLimitBytes !== undefined) {
       // The resident set does not shrink with a collection the way the heap does,
       // but net of the running estimates it is the idle floor the projection needs.
       this.rssBaselineBytes = ewma(
-        Math.max(0, this.getRssBytes() - committed),
+        Math.max(0, this.getRssBytes() - this.committedBytes(running, 'memory')),
         this.rssBaselineBytes,
         first
       );
@@ -323,17 +339,25 @@ export class AdaptiveCapacityController {
     this.liveBaselineSeen = true;
   }
 
-  /** What the running tasks are budgeted at: the learned estimate, or the reservation when it is larger. */
-  private committedBytes(running: readonly RunningTaskSnapshot[]): number {
-    return running.reduce(
-      (sum, task) =>
+  /**
+   * What the running tasks are budgeted at: the learned estimate, or the
+   * reservation when it is larger. The heap budget sees each run's heap share
+   * (a reservation is taken as whole-run memory, so it is scaled by the type's
+   * share too); the container budget sees the whole estimate.
+   */
+  private committedBytes(running: readonly RunningTaskSnapshot[], kind: 'heap' | 'memory'): number {
+    return running.reduce((sum, task) => {
+      const reserved = task.reservedBytes ?? 0;
+      return (
         sum +
-        Math.max(
-          this.estimator.estimateBytes(task.taskId, task.taskType, task.cost),
-          task.reservedBytes ?? 0
-        ),
-      0
-    );
+        (kind === 'memory'
+          ? Math.max(this.estimator.estimateBytes(task.taskId, task.taskType, task.cost), reserved)
+          : Math.max(
+              this.estimator.estimateHeapBytes(task.taskId, task.taskType, task.cost),
+              reserved * this.estimator.heapShare(task.taskType)
+            ))
+      );
+    }, 0);
   }
 
   /** Re-evaluates capacity now; returns the new value and emits it if it changed. */
@@ -367,7 +391,6 @@ export class AdaptiveCapacityController {
 
   private decide(trigger: AdaptiveCapacityTrigger): AdaptiveCapacityState {
     const { usedHeapBytes, externalBytes, heapLimitBytes } = this.getHeapStats();
-    const sampledBytes = usedHeapBytes + externalBytes;
     const running = this.getRunningTasks();
     const {
       minCapacity,
@@ -383,27 +406,34 @@ export class AdaptiveCapacityController {
     // is the only baseline available; it errs on the safe side.
     if (running.length === 0 && !this.liveBaselineSeen) {
       const first = this.baselineBytes === undefined;
-      this.baselineBytes = ewma(sampledBytes, this.baselineBytes, first);
+      this.baselineBytes = ewma(usedHeapBytes, this.baselineBytes, first);
       if (this.memoryLimitBytes !== undefined) {
         this.rssBaselineBytes = ewma(rssBytes, this.rssBaselineBytes, first);
       }
     }
-    const baseline = this.baselineBytes ?? sampledBytes;
+    const baseline = this.baselineBytes ?? usedHeapBytes;
 
+    // The heap budget guards V8's abort, so it sees heap only: used heap and the
+    // heap share of the running estimates.
     const runningCost = running.reduce((sum, task) => sum + task.cost, 0);
-    const committedBytes = this.committedBytes(running);
+    const committedHeapBytes = this.committedBytes(running, 'heap');
     const targetBytes = heapLimitBytes * heapTargetRatio;
-    const projectedBytes = Math.max(sampledBytes, baseline + committedBytes);
+    const projectedBytes = Math.max(usedHeapBytes, baseline + committedHeapBytes);
     const heapBudgetBytes = targetBytes - projectedBytes;
 
-    // Under a known limit the resident set gets the same arithmetic, and the
-    // tighter of the two budgets is what claims are admitted against.
+    // Under a known limit the resident set gets the same arithmetic with the whole
+    // estimates (buffers outside the heap included), and the tighter of the two
+    // budgets is what claims are admitted against.
     let memory: AdaptiveMemoryState | null = null;
     let budgetBytes = heapBudgetBytes;
+    let budgetSource: 'heap' | 'memory' = 'heap';
     if (this.memoryLimitBytes !== undefined) {
       const memoryTargetBytes = this.memoryLimitBytes * memoryTargetRatio;
       const rssBaseline = this.rssBaselineBytes ?? rssBytes;
-      const memoryProjectedBytes = Math.max(rssBytes, rssBaseline + committedBytes);
+      const memoryProjectedBytes = Math.max(
+        rssBytes,
+        rssBaseline + this.committedBytes(running, 'memory')
+      );
       const memoryBudgetBytes = memoryTargetBytes - memoryProjectedBytes;
       memory = {
         limit_bytes: this.memoryLimitBytes,
@@ -413,7 +443,10 @@ export class AdaptiveCapacityController {
         projected_bytes: Math.round(memoryProjectedBytes),
         budget_bytes: Math.round(memoryBudgetBytes),
       };
-      budgetBytes = Math.min(heapBudgetBytes, memoryBudgetBytes);
+      if (memoryBudgetBytes < heapBudgetBytes) {
+        budgetBytes = memoryBudgetBytes;
+        budgetSource = 'memory';
+      }
     }
 
     const reserved = running.filter((task) => (task.reservedBytes ?? 0) > 0);
@@ -451,6 +484,7 @@ export class AdaptiveCapacityController {
       heap_projected_bytes: Math.round(projectedBytes),
       heap_budget_bytes: Math.round(heapBudgetBytes),
       budget_bytes: Math.round(budgetBytes),
+      budget_source: budgetSource,
       memory,
       heap_live_ratio: Number(this.estimator.liveRatio().toFixed(3)),
       bytes_per_normal_task: Math.round(bytesPerNormalTask),

@@ -113,12 +113,17 @@ The background task utilization reported for autoscaling SHALL compute `load` ag
 
 ### Requirement: Memory outside the V8 heap counts toward the budget
 
-In adaptive mode Task Manager SHALL include the memory V8 tracks outside its heap (Buffers, ArrayBuffers and other external allocations) in the bytes it samples, so that a task's learned estimate covers the buffers it holds outside the heap and the projected total counts them.
+In adaptive mode Task Manager SHALL sample the memory V8 tracks outside its heap (Buffers, ArrayBuffers and other external allocations) next to used heap and attribute both to the running tasks, so that a task's learned estimate covers the buffers it holds outside the heap and its type's heap share is known. The heap budget SHALL count only the heap share of the running and candidate estimates; the whole estimate SHALL count against the container memory budget.
 
 #### Scenario: streaming task
 
 - **WHEN** a run decodes a 300 MB streamed response into ArrayBuffers while used heap grows by 6 MB
-- **THEN** the run's estimate reflects roughly 306 MB scaled by the live ratio, not 6 MB, and the budget for the next claim cycle is reduced accordingly
+- **THEN** the run's estimate reflects roughly 306 MB scaled by the live ratio with a heap share near 2 %, the heap budget is charged about 6 MB for its next run, and a container budget, when one exists, is charged the whole estimate
+
+#### Scenario: no container limit
+
+- **WHEN** no memory limit is known and external memory grows by 200 MB with the heap unchanged
+- **THEN** the heap budget is unchanged
 
 ### Requirement: The container memory limit bounds capacity
 

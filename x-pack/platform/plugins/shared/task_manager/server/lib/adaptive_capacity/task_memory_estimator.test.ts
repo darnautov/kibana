@@ -56,8 +56,8 @@ describe('TaskMemoryEstimator', () => {
     // an unseen instance of a seen type is never priced below the cold-start default
     expect(estimator.estimateBytes('task-new', 'heavy', 4)).toBe(80 * MB);
     expect(estimator.snapshot()).toEqual([
-      { task_type: 'heavy', bytes_per_cost_unit: 20 * MB, samples: 1 },
-      { task_type: 'light', bytes_per_cost_unit: 20 * MB, samples: 1 },
+      { task_type: 'heavy', bytes_per_cost_unit: 20 * MB, heap_share: 1, samples: 1 },
+      { task_type: 'light', bytes_per_cost_unit: 20 * MB, heap_share: 1, samples: 1 },
     ]);
   });
 
@@ -78,6 +78,7 @@ describe('TaskMemoryEstimator', () => {
     expect(estimator.snapshot()[0]).toEqual({
       task_type: 't',
       bytes_per_cost_unit: 100 * MB,
+      heap_share: 1,
       samples: 2,
     });
   });
@@ -284,6 +285,39 @@ describe('TaskMemoryEstimator', () => {
       estimator.sample(410 * MB, [run('r1', 'type')]);
       estimator.finalizeRun(run('r1', 'type'), 150 * MB);
       expect(estimator.estimateBytes('task-r1', 'type', 2)).toBe(150 * MB);
+    });
+  });
+
+  describe('memory outside the heap', () => {
+    it('learns the heap share of a type from the split of its growth', () => {
+      const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB, alpha: 1 });
+      estimator.sample(0, [run('r1', 'stream')], 0);
+      estimator.sample(10 * MB, [run('r1', 'stream')], 90 * MB);
+      estimator.taskEnded(run('r1', 'stream'));
+      expect(estimator.heapShare('stream')).toBe(0.1);
+      expect(estimator.estimateBytes('task-r1', 'stream', 2)).toBe(100 * MB);
+      expect(estimator.estimateHeapBytes('task-r1', 'stream', 2)).toBe(10 * MB);
+      expect(estimator.heapShare('unknown')).toBe(1);
+      expect(estimator.snapshot()[0]).toEqual({
+        task_type: 'stream',
+        bytes_per_cost_unit: 50 * MB,
+        heap_share: 0.1,
+        samples: 1,
+      });
+    });
+
+    it('calibrates the live ratio on heap and external memory together', () => {
+      const estimator = new TaskMemoryEstimator({
+        defaultBytesPerTask: 64 * MB,
+        calibrationBytes: 100 * MB,
+        alpha: 1,
+      });
+      estimator.liveSample(0, 0);
+      estimator.sample(0, [run('r1', 'stream')], 0);
+      estimator.sample(100 * MB, [run('r1', 'stream')], 300 * MB);
+      estimator.taskEnded(run('r1', 'stream'));
+      estimator.liveSample(50 * MB, 50 * MB);
+      expect(estimator.liveRatio()).toBe(0.25);
     });
   });
 });

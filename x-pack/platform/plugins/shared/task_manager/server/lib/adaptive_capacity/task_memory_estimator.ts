@@ -36,6 +36,8 @@ export interface TaskMemoryEstimatorOpts {
 export interface TaskTypeMemoryEstimate extends JsonObject {
   task_type: string;
   bytes_per_cost_unit: number;
+  /** Share of the type's memory that lands on the V8 heap; the rest is external (Buffers, ArrayBuffers). */
+  heap_share: number;
   samples: number;
 }
 
@@ -59,13 +61,18 @@ interface TypeEstimate {
   /** Most recent observations of this type, per cost unit, oldest first. */
   readonly recent: number[];
   samples: number;
+  /** Moving average of the heap share of this type's runs; 1 until an external allocation is seen. */
+  heapShare: number;
 }
 
 interface InFlightRun {
   readonly taskId: string;
   readonly taskType: string;
   readonly cost: number;
+  /** Heap growth attributed so far. */
   bytes: number;
+  /** Growth outside the heap attributed so far. */
+  externalBytes: number;
 }
 
 const DEFAULT_ALPHA = 0.3;
@@ -125,7 +132,8 @@ export class TaskMemoryEstimator {
   private seededInstances = 0;
   private reportedRuns = 0;
   private lastUsedHeapBytes?: number;
-  private lastLiveHeapBytes?: number;
+  private lastExternalBytes?: number;
+  private lastLiveBytes?: number;
   private allocatedGrowth = 0;
   private liveGrowth = 0;
   private ratio = 1;
@@ -150,8 +158,17 @@ export class TaskMemoryEstimator {
     this.lightBytesPerCostUnit = lightBytesPerCostUnit;
   }
 
-  /** Records one heap sample together with the tasks that were running when it was taken. */
-  public sample(usedHeapBytes: number, running: readonly RunningTaskSnapshot[]): void {
+  /**
+   * Records one memory sample together with the tasks that were running when it
+   * was taken. Heap growth and growth outside the heap (`externalBytes`, what V8
+   * tracks for Buffers and ArrayBuffers) are attributed separately, so a type
+   * that streams into buffers learns how much of its footprint is heap.
+   */
+  public sample(
+    usedHeapBytes: number,
+    running: readonly RunningTaskSnapshot[],
+    externalBytes = 0
+  ): void {
     for (const task of running) {
       if (!this.inFlight.has(task.executionId) && !this.finalized.has(task.executionId)) {
         this.inFlight.set(task.executionId, {
@@ -159,19 +176,27 @@ export class TaskMemoryEstimator {
           taskType: task.taskType,
           cost: task.cost,
           bytes: 0,
+          externalBytes: 0,
         });
       }
     }
 
-    const delta = this.lastUsedHeapBytes === undefined ? 0 : usedHeapBytes - this.lastUsedHeapBytes;
+    const heapDelta =
+      this.lastUsedHeapBytes === undefined ? 0 : usedHeapBytes - this.lastUsedHeapBytes;
+    const externalDelta =
+      this.lastExternalBytes === undefined ? 0 : externalBytes - this.lastExternalBytes;
     this.lastUsedHeapBytes = usedHeapBytes;
+    this.lastExternalBytes = externalBytes;
 
-    if (delta > 0) this.allocatedGrowth += delta;
-    if (delta > 0 && running.length > 0) {
+    if (heapDelta > 0) this.allocatedGrowth += heapDelta;
+    if (externalDelta > 0) this.allocatedGrowth += externalDelta;
+    if ((heapDelta > 0 || externalDelta > 0) && running.length > 0) {
       const totalCost = running.reduce((sum, task) => sum + task.cost, 0);
       for (const task of running) {
         const run = this.inFlight.get(task.executionId);
-        if (run) run.bytes += (delta * task.cost) / totalCost;
+        if (!run) continue;
+        if (heapDelta > 0) run.bytes += (heapDelta * task.cost) / totalCost;
+        if (externalDelta > 0) run.externalBytes += (externalDelta * task.cost) / totalCost;
       }
     }
 
@@ -198,6 +223,7 @@ export class TaskMemoryEstimator {
       taskType: task.taskType,
       cost: task.cost,
       bytes: 0,
+      externalBytes: 0,
     };
     this.inFlight.delete(task.executionId);
     this.observe(run, reportedBytes);
@@ -268,16 +294,18 @@ export class TaskMemoryEstimator {
   }
 
   /**
-   * Records the heap used right after a major garbage collection. Growth between
-   * two such samples is live data; comparing it with the allocation seen by
-   * `sample()` over the same period calibrates the estimates.
+   * Records the memory in use right after a major garbage collection, heap and
+   * external. Growth between two such samples is live data; comparing it with
+   * the allocation seen by `sample()` over the same period calibrates the
+   * estimates.
    */
-  public liveSample(usedHeapBytes: number): void {
-    if (this.lastLiveHeapBytes !== undefined) {
-      const delta = usedHeapBytes - this.lastLiveHeapBytes;
+  public liveSample(usedHeapBytes: number, externalBytes = 0): void {
+    const liveBytes = usedHeapBytes + externalBytes;
+    if (this.lastLiveBytes !== undefined) {
+      const delta = liveBytes - this.lastLiveBytes;
       if (delta > 0) this.liveGrowth += delta;
     }
-    this.lastLiveHeapBytes = usedHeapBytes;
+    this.lastLiveBytes = liveBytes;
     if (this.allocatedGrowth < this.calibrationBytes) return;
     const observed = Math.min(1, Math.max(MIN_LIVE_RATIO, this.liveGrowth / this.allocatedGrowth));
     this.ratio = this.alpha * observed + (1 - this.alpha) * this.ratio;
@@ -310,6 +338,23 @@ export class TaskMemoryEstimator {
     return Math.max(fromType, this.defaultBytesPerTask, this.minBytesPerCostUnit * cost);
   }
 
+  /**
+   * The part of `estimateBytes()` expected on the V8 heap, from the type's
+   * learned heap share: what the heap budget must hold for the run, while the
+   * container budget holds the whole estimate.
+   */
+  public estimateHeapBytes(taskId: string, taskType: string, cost: number): number {
+    return Math.max(
+      this.estimateBytes(taskId, taskType, cost) * this.heapShare(taskType),
+      this.minBytesPerCostUnit * cost
+    );
+  }
+
+  /** Share of a type's memory that lands on the heap; 1 until the type has shown external allocations. */
+  public heapShare(taskType: string): number {
+    return this.byType.get(taskType)?.heapShare ?? 1;
+  }
+
   /** Bytes per run for an instance; a seeded value already carries the writer's live ratio. */
   private instanceBytesPerRun(instance: Estimate, cost: number): number {
     return instance.bytesPerCostUnit * cost * (instance.seeded ? 1 : this.ratio);
@@ -340,6 +385,7 @@ export class TaskMemoryEstimator {
     return Array.from(this.byType, ([taskType, estimate]) => ({
       task_type: taskType,
       bytes_per_cost_unit: Math.round(percentile(estimate.recent, this.slotPercentile)),
+      heap_share: Number(estimate.heapShare.toFixed(2)),
       samples: estimate.samples,
     }))
       .sort((a, b) => b.bytes_per_cost_unit - a.bytes_per_cost_unit)
@@ -350,13 +396,21 @@ export class TaskMemoryEstimator {
     // A report is live bytes the task held. The measured share is allocation
     // that the live ratio scales down later, so the report is lifted into the
     // same domain before the larger of the two is kept.
-    let bytes = run.bytes;
+    const measured = run.bytes + run.externalBytes;
+    let bytes = measured;
     if (reportedBytes !== undefined) {
       this.reportedRuns++;
       bytes = Math.max(bytes, reportedBytes / this.ratio);
     }
     const observed = run.cost > 0 ? bytes / run.cost : bytes;
-    const type = this.byType.get(run.taskType) ?? { recent: [], samples: 0 };
+    const type = this.byType.get(run.taskType) ?? { recent: [], samples: 0, heapShare: 1 };
+    // A run that allocated nothing says nothing about the split; a report is
+    // taken as external, since that is what the process-level view misses.
+    if (bytes > 0) {
+      const heapShare = Math.min(1, run.bytes / bytes);
+      type.heapShare =
+        type.samples === 0 ? heapShare : this.alpha * heapShare + (1 - this.alpha) * type.heapShare;
+    }
     type.recent.push(observed);
     if (type.recent.length > TYPE_WINDOW_SIZE) type.recent.shift();
     type.samples++;

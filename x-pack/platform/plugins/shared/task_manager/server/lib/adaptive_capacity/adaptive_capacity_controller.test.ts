@@ -92,6 +92,7 @@ describe('AdaptiveCapacityController', () => {
     expect(controller.state.estimates[0]).toEqual({
       task_type: 't',
       bytes_per_cost_unit: 50 * MB,
+      heap_share: 1,
       samples: 1,
     });
   });
@@ -165,6 +166,7 @@ describe('AdaptiveCapacityController', () => {
     expect(controller.state.estimates[0]).toEqual({
       task_type: 'heavy',
       bytes_per_cost_unit: 50 * MB,
+      heap_share: 1,
       samples: 4,
     });
   });
@@ -265,28 +267,57 @@ describe('AdaptiveCapacityController', () => {
   });
 
   describe('memory outside the heap', () => {
-    it('attributes external growth to the running task like heap growth', () => {
-      const { controller, setExternal, setRunning } = setup();
+    it('attributes external growth to the running task and learns its heap share', () => {
+      const { controller, setHeap, setExternal, setRunning } = setup();
       setRunning([task('a')]);
       controller.tick();
+      setHeap(1100);
       setExternal(300);
       expect(controller.observeRunEnd(task('a'))).toEqual({
-        bytes: 300 * MB,
-        instanceBytes: 300 * MB,
+        bytes: 400 * MB,
+        instanceBytes: 400 * MB,
         samples: 1,
       });
       controller.refresh('tick');
       expect(controller.state.heap_external_bytes).toBe(300 * MB);
+      expect(controller.state.estimates[0]).toEqual({
+        task_type: 't',
+        bytes_per_cost_unit: 200 * MB,
+        heap_share: 0.25,
+        samples: 1,
+      });
+      // The heap budget holds the run's heap share only; the whole estimate is the memory figure.
+      expect(controller.estimator.estimateBytes('task-a', 't', 2)).toBe(400 * MB);
+      expect(controller.estimator.estimateHeapBytes('task-a', 't', 2)).toBe(100 * MB);
     });
 
-    it('reduces the budget when only external memory grows', () => {
+    it('leaves the heap budget alone when only external memory grows and no limit is known', () => {
       const { controller, setExternal } = setup();
       controller.tick();
       const before = controller.state.heap_budget_bytes;
       setExternal(200);
       controller.refresh('tick');
-      expect(controller.state.heap_budget_bytes).toBe(before - 200 * MB);
-      expect(controller.state.budget_bytes).toBe(before - 200 * MB);
+      expect(controller.state.heap_budget_bytes).toBe(before);
+      expect(controller.state.budget_source).toBe('heap');
+    });
+
+    it('prices candidates by their heap share against the heap budget and whole against the memory budget', () => {
+      const { controller, setHeap, setExternal, setRunning, setRss } = setup({
+        settings: { memoryLimitBytes: 2048 * MB },
+      });
+      setRunning([task('a')]);
+      controller.tick();
+      setHeap(1100);
+      setExternal(300);
+      controller.observeRunEnd(task('a'));
+      setRunning([]);
+      controller.refresh('tick');
+      expect(controller.memoryGate().estimateBytes('task-a', 't', 2)).toBe(100 * MB);
+
+      setRss(1700);
+      controller.refresh('tick');
+      expect(controller.state.budget_source).toBe('memory');
+      expect(controller.memoryGate().estimateBytes('task-a', 't', 2)).toBe(400 * MB);
     });
   });
 
