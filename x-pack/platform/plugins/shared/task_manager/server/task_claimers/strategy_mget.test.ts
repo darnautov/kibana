@@ -437,6 +437,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 150 * MB,
           lightTaskBytes: 0,
+          reservedBytes: 0,
           seed: () => false,
           estimateBytes: () => 60 * MB,
         }),
@@ -449,7 +450,7 @@ describe('TaskClaiming', () => {
       const result = unwrap(resultOrErr) as ClaimOwnershipResult;
 
       expect(taskManagerLogger.debug).toHaveBeenCalledWith(
-        'task claimer claimed: 2; stale: 0; conflicts: 0; missing: 0; capacity reached: 2; updateErrors: 0; getErrors: 0; malformed data errors: 0; heap budget: 150 MB, planned: 120 MB, heap limited: 2, seeded: 0',
+        'task claimer claimed: 2; stale: 0; conflicts: 0; missing: 0; capacity reached: 2; updateErrors: 0; getErrors: 0; malformed data errors: 0; heap budget: 150 MB, planned: 120 MB, reserved: 0 MB, heap limited: 2, seeded: 0',
         { tags: ['taskClaiming', 'claimAvailableTasksMget'] }
       );
       expect(store.bulkPartialUpdate.mock.calls[0][0].map((task) => task.id)).toEqual([
@@ -489,6 +490,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 100 * MB,
           lightTaskBytes: 8 * MB,
+          reservedBytes: 0,
           seed: () => false,
           estimateBytes: (id) => (id.startsWith('heavy') ? 120 * MB : MB),
         }),
@@ -547,6 +549,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 100 * MB,
           lightTaskBytes: 8 * MB,
+          reservedBytes: 0,
           seed: (id, _type, _cost, estimate) => {
             seeded.set(id, estimate.bytes);
             return true;
@@ -594,6 +597,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 0,
           lightTaskBytes: 0,
+          reservedBytes: 0,
           seed: () => false,
           estimateBytes: () => 500 * 1024 * 1024,
         }),
@@ -630,6 +634,7 @@ describe('TaskClaiming', () => {
         getMemoryGate: () => ({
           budgetBytes: 100 * 1024 * 1024,
           lightTaskBytes: 0,
+          reservedBytes: 0,
           seed: () => false,
           estimateBytes: () => 500 * 1024 * 1024,
         }),

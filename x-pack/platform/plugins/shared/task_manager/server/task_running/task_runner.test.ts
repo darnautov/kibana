@@ -18,7 +18,7 @@ import {
 } from '.';
 import type { TaskEvent, TaskRun } from '../task_events';
 import { asTaskRunEvent, TaskPersistence, asTaskManagerStatEvent } from '../task_events';
-import type { ConcreteTaskInstance, TaskEventLogger } from '../task';
+import type { ConcreteTaskInstance, RunContext, TaskEventLogger } from '../task';
 import {
   getDeleteTaskRunResult,
   TaskPriority,
@@ -4515,12 +4515,15 @@ describe('TaskManagerRunner', () => {
 
       await runner.run();
 
-      expect(observeRunEnd).toHaveBeenCalledWith({
-        executionId: runner.taskExecutionId,
-        taskId: instance.id,
-        taskType: 'bar',
-        cost: 2,
-      });
+      expect(observeRunEnd).toHaveBeenCalledWith(
+        {
+          executionId: runner.taskExecutionId,
+          taskId: instance.id,
+          taskType: 'bar',
+          cost: 2,
+        },
+        undefined
+      );
       expect(store.partialUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           memoryEstimate: { bytes: 42 * MB, samples: 3, updatedAt: expect.any(String) },
@@ -4533,6 +4536,122 @@ describe('TaskManagerRunner', () => {
           kibana: { task: expect.objectContaining({ memory_bytes: 40 * MB }) },
         })
       );
+    });
+
+    test('hands the task a memory reporter whose peak reaches the controller and the event', async () => {
+      const observeRunEnd = jest.fn().mockReturnValue(observation);
+      let reservationDuringRun = -1;
+      const { runner, instance } = await readyToRunStageSetup({
+        instance: { schedule: { interval: '10m' } },
+        definitions: {
+          bar: {
+            title: 'Bar!',
+            createTaskRunner: ({ memory }: RunContext) => ({
+              async run() {
+                memory?.report(30 * MB);
+                memory?.reserve(200 * MB);
+                reservationDuringRun = runner.memoryReservationBytes;
+                memory?.report(70 * MB);
+                memory?.report(50 * MB);
+                return { state: {} };
+              },
+            }),
+          },
+        },
+        observeRunEnd,
+      });
+
+      await runner.run();
+
+      expect(reservationDuringRun).toBe(200 * MB);
+      expect(runner.memoryReservationBytes).toBe(0);
+      expect(observeRunEnd).toHaveBeenCalledWith(
+        { executionId: runner.taskExecutionId, taskId: instance.id, taskType: 'bar', cost: 2 },
+        70 * MB
+      );
+      expect(eventLoggerMock.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({ action: 'task-run' }),
+          kibana: {
+            task: expect.objectContaining({
+              memory_bytes: 40 * MB,
+              memory_reported_bytes: 70 * MB,
+            }),
+          },
+        })
+      );
+    });
+
+    test('ignores reporter calls that arrive after the run ended', async () => {
+      const observeRunEnd = jest.fn().mockReturnValue(observation);
+      let leaked: RunContext['memory'];
+      const { runner } = await readyToRunStageSetup({
+        instance: { schedule: { interval: '10m' } },
+        definitions: {
+          bar: {
+            title: 'Bar!',
+            createTaskRunner: ({ memory }: RunContext) => ({
+              async run() {
+                leaked = memory;
+                return { state: {} };
+              },
+            }),
+          },
+        },
+        observeRunEnd,
+      });
+
+      await runner.run();
+      leaked?.reserve(500 * MB);
+      leaked?.report(500 * MB);
+
+      expect(runner.memoryReservationBytes).toBe(0);
+      expect(observeRunEnd).toHaveBeenCalledWith(expect.anything(), undefined);
+    });
+
+    test('gives the task a no-op reporter when task reports are off or capacity is fixed', async () => {
+      for (const setup of [
+        { observeRunEnd: jest.fn().mockReturnValue(observation), taskReports: false },
+        { observeRunEnd: undefined, taskReports: true },
+      ]) {
+        const { runner } = await readyToRunStageSetup({
+          instance: { schedule: { interval: '10m' } },
+          definitions: {
+            bar: {
+              title: 'Bar!',
+              createTaskRunner: ({ memory }: RunContext) => ({
+                async run() {
+                  memory?.reserve(500 * MB);
+                  memory?.report(500 * MB);
+                  expect(runner.memoryReservationBytes).toBe(0);
+                  return { state: {} };
+                },
+              }),
+            },
+          },
+          observeRunEnd: setup.observeRunEnd,
+          config: {
+            adaptive_capacity: {
+              ...configMock.create().adaptive_capacity,
+              task_reports: setup.taskReports,
+            },
+          },
+        });
+
+        await runner.run();
+
+        if (setup.observeRunEnd) {
+          expect(setup.observeRunEnd).toHaveBeenCalledWith(expect.anything(), undefined);
+        }
+        expect(eventLoggerMock.logEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: expect.objectContaining({ action: 'task-run' }),
+            kibana: {
+              task: expect.not.objectContaining({ memory_reported_bytes: expect.anything() }),
+            },
+          })
+        );
+      }
     });
 
     test('keeps the estimate out of the update when persistence is off', async () => {

@@ -57,6 +57,48 @@ export const registerAdaptiveCapacityTelemetry = (
       valueType: ValueType.DOUBLE,
     }
   );
+  const heapExternal = meter.createObservableGauge(
+    'kibana.task_manager.adaptive_capacity.heap.external',
+    {
+      description:
+        'Memory V8 tracks outside its heap (Buffers, ArrayBuffers), counted with the heap.',
+      unit: 'By',
+      valueType: ValueType.INT,
+    }
+  );
+  const memoryBudget = meter.createObservableGauge(
+    'kibana.task_manager.adaptive_capacity.memory.budget',
+    {
+      description:
+        'Resident memory left under the container limit after the running tasks; absent without a limit.',
+      unit: 'By',
+      valueType: ValueType.INT,
+    }
+  );
+  const memoryRss = meter.createObservableGauge(
+    'kibana.task_manager.adaptive_capacity.memory.rss',
+    {
+      description: 'Resident set size seen by the controller; absent without a memory limit.',
+      unit: 'By',
+      valueType: ValueType.INT,
+    }
+  );
+  const reservationBytes = meter.createObservableGauge(
+    'kibana.task_manager.adaptive_capacity.reservation.bytes',
+    {
+      description: 'Memory the running tasks reserved through the run context.',
+      unit: 'By',
+      valueType: ValueType.INT,
+    }
+  );
+  const reservationTasks = meter.createObservableGauge(
+    'kibana.task_manager.adaptive_capacity.reservation.tasks',
+    {
+      description: 'Running tasks holding a memory reservation.',
+      unit: '{task}',
+      valueType: ValueType.INT,
+    }
+  );
   const taskTypeMemory = meter.createObservableGauge(
     'kibana.task_manager.adaptive_capacity.task_type.memory',
     {
@@ -75,12 +117,31 @@ export const registerAdaptiveCapacityTelemetry = (
       result.observe(heapProjected, state.heap_projected_bytes);
       result.observe(slotMemory, state.bytes_per_normal_task);
       result.observe(liveRatio, state.heap_live_ratio);
+      result.observe(heapExternal, state.heap_external_bytes);
+      if (state.memory) {
+        result.observe(memoryBudget, state.memory.budget_bytes);
+        result.observe(memoryRss, state.memory.rss_bytes);
+      }
+      result.observe(reservationBytes, state.reservations.bytes);
+      result.observe(reservationTasks, state.reservations.tasks);
       for (const estimate of state.estimates) {
         result.observe(taskTypeMemory, estimate.bytes_per_cost_unit, {
           'task.type': estimate.task_type,
         });
       }
     },
-    [capacity, heapBudget, heapProjected, slotMemory, liveRatio, taskTypeMemory]
+    [
+      capacity,
+      heapBudget,
+      heapProjected,
+      slotMemory,
+      liveRatio,
+      heapExternal,
+      memoryBudget,
+      memoryRss,
+      reservationBytes,
+      reservationTasks,
+      taskTypeMemory,
+    ]
   );
 };

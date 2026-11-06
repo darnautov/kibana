@@ -290,8 +290,8 @@ async function claimAvailableTasks(opts: TaskClaimerOpts): Promise<ClaimOwnershi
   const memoryMessage = memoryGate
     ? `; heap budget: ${Math.round(
         memoryGate.budgetBytes / (1024 * 1024)
-      )} MB, planned: ${Math.round(
-        memoryAccumulator / (1024 * 1024)
+      )} MB, planned: ${Math.round(memoryAccumulator / (1024 * 1024))} MB, reserved: ${Math.round(
+        memoryGate.reservedBytes / (1024 * 1024)
       )} MB, heap limited: ${memoryLimited}, seeded: ${seeded}`
     : '';
   const message = `task claimer claimed: ${fullTasksToRun.length}; stale: ${staleTasks.length}; conflicts: ${conflicts}; missing: ${missingTasks.length}; capacity reached: ${leftOverTasks.length}; updateErrors: ${bulkUpdateErrors}; getErrors: ${bulkGetErrors}; malformed data errors: ${tasksWithMalformedData.length}${memoryMessage}`;

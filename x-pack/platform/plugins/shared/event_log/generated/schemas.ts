@@ -111,6 +111,7 @@ export const EventSchema = schema.maybe(
             scheduled: ecsDate(),
             schedule_delay: ecsStringOrNumber(),
             memory_bytes: ecsStringOrNumber(),
+            memory_reported_bytes: ecsStringOrNumber(),
             execution: schema.maybe(
               schema.object({
                 uuid: ecsString(),

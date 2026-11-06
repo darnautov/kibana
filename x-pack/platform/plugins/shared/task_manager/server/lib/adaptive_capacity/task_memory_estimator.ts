@@ -123,6 +123,7 @@ export class TaskMemoryEstimator {
   private readonly finalized = new Set<string>();
   private readonly recent: number[] = [];
   private seededInstances = 0;
+  private reportedRuns = 0;
   private lastUsedHeapBytes?: number;
   private lastLiveHeapBytes?: number;
   private allocatedGrowth = 0;
@@ -187,9 +188,10 @@ export class TaskMemoryEstimator {
    * Finalises a run the moment it ends. Callers should `sample()` first with the
    * ending run still in the running set, so growth since the last sample is
    * attributed to it; otherwise runs shorter than the sample interval would
-   * look free.
+   * look free. `reportedBytes` is the peak the task reported through the run
+   * context; it can only raise the observation.
    */
-  public taskEnded(task: RunningTaskSnapshot): void {
+  public taskEnded(task: RunningTaskSnapshot, reportedBytes?: number): void {
     if (this.finalized.has(task.executionId)) return;
     const run = this.inFlight.get(task.executionId) ?? {
       taskId: task.taskId,
@@ -198,7 +200,7 @@ export class TaskMemoryEstimator {
       bytes: 0,
     };
     this.inFlight.delete(task.executionId);
-    this.observe(run);
+    this.observe(run, reportedBytes);
   }
 
   /**
@@ -206,9 +208,12 @@ export class TaskMemoryEstimator {
    * updated, and returns what was learned so it can be written to the document
    * and the event log. A later `taskEnded()` for the same execution is a no-op.
    */
-  public finalizeRun(task: RunningTaskSnapshot): RunMemoryObservation | undefined {
+  public finalizeRun(
+    task: RunningTaskSnapshot,
+    reportedBytes?: number
+  ): RunMemoryObservation | undefined {
     if (this.finalized.has(task.executionId)) return undefined;
-    this.taskEnded(task);
+    this.taskEnded(task, reportedBytes);
     this.finalized.add(task.executionId);
     if (this.finalized.size > MAX_FINALIZED_RUNS) {
       const oldest = this.finalized.values().next().value;
@@ -250,6 +255,11 @@ export class TaskMemoryEstimator {
     this.trimInstances();
     this.seededInstances++;
     return true;
+  }
+
+  /** Runs that reported a memory peak through the run context since the node started. */
+  public reportedRunCount(): number {
+    return this.reportedRuns;
   }
 
   /** Instances whose first estimate on this node came from their document. */
@@ -336,8 +346,16 @@ export class TaskMemoryEstimator {
       .slice(0, limit);
   }
 
-  private observe(run: InFlightRun): void {
-    const observed = run.cost > 0 ? run.bytes / run.cost : run.bytes;
+  private observe(run: InFlightRun, reportedBytes?: number): void {
+    // A report is live bytes the task held. The measured share is allocation
+    // that the live ratio scales down later, so the report is lifted into the
+    // same domain before the larger of the two is kept.
+    let bytes = run.bytes;
+    if (reportedBytes !== undefined) {
+      this.reportedRuns++;
+      bytes = Math.max(bytes, reportedBytes / this.ratio);
+    }
+    const observed = run.cost > 0 ? bytes / run.cost : bytes;
     const type = this.byType.get(run.taskType) ?? { recent: [], samples: 0 };
     type.recent.push(observed);
     if (type.recent.length > TYPE_WINDOW_SIZE) type.recent.shift();

@@ -37,6 +37,10 @@ exports.EcsCustomPropertyMappings = {
           memory_bytes: {
             type: 'long',
           },
+          // peak memory the task reported through its run context, in bytes
+          memory_reported_bytes: {
+            type: 'long',
+          },
           execution: {
             properties: {
               uuid: {

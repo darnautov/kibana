@@ -7,13 +7,14 @@
 
 import { loggingSystemMock } from '@kbn/core/server/mocks';
 import type { RunningTaskSnapshot } from '../../task_pool';
+import type { AdaptiveCapacitySettings } from './adaptive_capacity_controller';
 import { AdaptiveCapacityController, readMaxOldSpaceBytes } from './adaptive_capacity_controller';
 import { TaskMemoryEstimator } from './task_memory_estimator';
 
 const MB = 1024 * 1024;
 const LIMIT = 2048 * MB;
 
-const settings = {
+const settings: AdaptiveCapacitySettings = {
   minCapacity: 2,
   maxCapacity: 50,
   heapTargetRatio: 0.75, // 1536 MB
@@ -22,6 +23,7 @@ const settings = {
   lightTaskBytes: 0,
   lightTaskSlots: 0,
   persistEstimates: true,
+  memoryTargetRatio: 0.85,
 };
 
 const task = (executionId: string, taskType = 't', cost = 2): RunningTaskSnapshot => ({
@@ -32,16 +34,26 @@ const task = (executionId: string, taskType = 't', cost = 2): RunningTaskSnapsho
 });
 
 const setup = (
-  opts: { estimator?: TaskMemoryEstimator; settings?: Partial<typeof settings> } = {}
+  opts: {
+    estimator?: TaskMemoryEstimator;
+    settings?: Partial<AdaptiveCapacitySettings>;
+    constrainedMemory?: number;
+  } = {}
 ) => {
   let usedHeapBytes = 1000 * MB;
+  let externalBytes = 0;
+  let rssBytes = 1200 * MB;
   let running: RunningTaskSnapshot[] = [];
   let majorGc = () => {};
   const unobserve = jest.fn();
+  const getRssBytes = jest.fn(() => rssBytes);
   const controller = new AdaptiveCapacityController({
     logger: loggingSystemMock.createLogger(),
     settings: { ...settings, ...opts.settings },
-    getHeapStats: () => ({ usedHeapBytes, heapLimitBytes: LIMIT }),
+    getHeapStats: () => ({ usedHeapBytes, externalBytes, heapLimitBytes: LIMIT }),
+    // The test host may itself run in a container; never let its limit leak in.
+    getConstrainedMemory: () => opts.constrainedMemory ?? 0,
+    getRssBytes,
     getRunningTasks: () => running,
     estimator: opts.estimator,
     observeMajorGc: (onMajorGc) => {
@@ -54,6 +66,9 @@ const setup = (
     majorGc: () => majorGc(),
     unobserve,
     setHeap: (mb: number) => (usedHeapBytes = mb * MB),
+    setExternal: (mb: number) => (externalBytes = mb * MB),
+    setRss: (mb: number) => (rssBytes = mb * MB),
+    getRssBytes,
     setRunning: (tasks: RunningTaskSnapshot[]) => (running = tasks),
   };
 };
@@ -247,6 +262,119 @@ describe('AdaptiveCapacityController', () => {
     controller.refresh('tick');
     expect(controller.state.heap_baseline_bytes).toBe(1080 * MB);
     expect(controller.state.heap_projected_bytes).toBe(1400 * MB);
+  });
+
+  describe('memory outside the heap', () => {
+    it('attributes external growth to the running task like heap growth', () => {
+      const { controller, setExternal, setRunning } = setup();
+      setRunning([task('a')]);
+      controller.tick();
+      setExternal(300);
+      expect(controller.observeRunEnd(task('a'))).toEqual({
+        bytes: 300 * MB,
+        instanceBytes: 300 * MB,
+        samples: 1,
+      });
+      controller.refresh('tick');
+      expect(controller.state.heap_external_bytes).toBe(300 * MB);
+    });
+
+    it('reduces the budget when only external memory grows', () => {
+      const { controller, setExternal } = setup();
+      controller.tick();
+      const before = controller.state.heap_budget_bytes;
+      setExternal(200);
+      controller.refresh('tick');
+      expect(controller.state.heap_budget_bytes).toBe(before - 200 * MB);
+      expect(controller.state.budget_bytes).toBe(before - 200 * MB);
+    });
+  });
+
+  describe('container memory limit', () => {
+    it('keeps a single heap budget and never reads the resident set without a limit', () => {
+      const { controller, getRssBytes } = setup();
+      controller.tick();
+      expect(controller.state.memory).toBeNull();
+      expect(controller.state.budget_bytes).toBe(controller.state.heap_budget_bytes);
+      expect(getRssBytes).not.toHaveBeenCalled();
+    });
+
+    it('takes the limit Node reports when none is configured', () => {
+      const { controller } = setup({ constrainedMemory: 2048 * MB });
+      controller.tick();
+      expect(controller.state.memory?.limit_bytes).toBe(2048 * MB);
+      expect(controller.state.memory?.target_bytes).toBe(Math.round(2048 * MB * 0.85));
+    });
+
+    it('lets the memory budget bind when the resident set is high and the heap budget otherwise', () => {
+      const { controller, setRss } = setup({ settings: { memoryLimitBytes: 2048 * MB } });
+      // rss 1200 of a 1740 MB target leaves 540 MB; the heap budget is 1536 - 1000 = 536 MB.
+      controller.tick();
+      expect(controller.state.memory).toEqual(
+        expect.objectContaining({ rss_bytes: 1200 * MB, budget_bytes: Math.round(540.8 * MB) })
+      );
+      expect(controller.state.budget_bytes).toBe(controller.state.heap_budget_bytes);
+
+      setRss(1700);
+      controller.refresh('tick');
+      expect(controller.state.memory?.budget_bytes).toBe(Math.round(40.8 * MB));
+      expect(controller.state.budget_bytes).toBe(Math.round(40.8 * MB));
+      expect(controller.memoryGate().budgetBytes).toBe(Math.round(40.8 * MB));
+      expect(controller.state.free_slots).toBe(0);
+    });
+
+    it('projects the resident set from its idle floor plus the running estimates', () => {
+      const { controller, setRss, setRunning, majorGc } = setup({
+        settings: { memoryLimitBytes: 2048 * MB },
+      });
+      controller.tick();
+      setRunning([task('a')]);
+      // After a collection the floor is rss net of what the running task is budgeted at (100 MB default).
+      setRss(1300);
+      majorGc();
+      controller.refresh('tick');
+      expect(controller.state.memory?.baseline_bytes).toBe(1200 * MB);
+      expect(controller.state.memory?.projected_bytes).toBe(1300 * MB);
+    });
+  });
+
+  describe('reservations', () => {
+    it('budgets a running task at its reservation when that is above its estimate', () => {
+      const { controller, setRunning } = setup();
+      controller.tick();
+      setRunning([task('a')]);
+      controller.refresh('tick');
+      const withEstimate = controller.state.heap_budget_bytes; // default 100 MB
+      setRunning([{ ...task('a'), reservedBytes: 400 * MB }]);
+      controller.refresh('claim');
+      expect(controller.state.heap_budget_bytes).toBe(withEstimate - 300 * MB);
+      expect(controller.state.reservations).toEqual({ tasks: 1, bytes: 400 * MB });
+      expect(controller.memoryGate().reservedBytes).toBe(400 * MB);
+
+      // Released, or reserved below the estimate: the estimate applies again.
+      setRunning([{ ...task('a'), reservedBytes: 0 }]);
+      controller.refresh('tick');
+      expect(controller.state.heap_budget_bytes).toBe(withEstimate);
+      expect(controller.state.reservations).toEqual({ tasks: 0, bytes: 0 });
+      setRunning([{ ...task('a'), reservedBytes: 10 * MB }]);
+      controller.refresh('tick');
+      expect(controller.state.heap_budget_bytes).toBe(withEstimate);
+    });
+
+    it('folds the peak a run reported into its estimate', () => {
+      const { controller, setHeap, setRunning } = setup();
+      setRunning([task('a')]);
+      controller.tick();
+      setHeap(1010);
+      expect(controller.observeRunEnd(task('a'), 150 * MB)).toEqual({
+        bytes: 150 * MB,
+        instanceBytes: 150 * MB,
+        samples: 1,
+      });
+      expect(controller.state.reported_runs).toBe(0);
+      controller.refresh('tick');
+      expect(controller.state.reported_runs).toBe(1);
+    });
   });
 });
 

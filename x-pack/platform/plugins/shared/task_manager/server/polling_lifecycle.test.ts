@@ -155,6 +155,8 @@ describe('TaskPollingLifecycle', () => {
         light_task_bytes: 8388608,
         light_task_slots: 10,
         persist_estimates: true,
+        task_reports: true,
+        memory_target_ratio: 0.85,
       },
       claim_nudge: {
         enabled: true,

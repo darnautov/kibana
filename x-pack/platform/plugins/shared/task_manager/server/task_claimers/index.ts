@@ -26,6 +26,8 @@ export interface ClaimMemoryGate {
   budgetBytes: number;
   /** Runs estimated at or below this are admitted against capacity only. */
   lightTaskBytes: number;
+  /** Bytes the running tasks have reserved beyond their estimates, already taken off the budget. */
+  reservedBytes: number;
   estimateBytes: (taskId: string, taskType: string, cost: number) => number;
   /** Restores an instance estimate from its document; true when the instance was unknown and took it. */
   seed: (taskId: string, taskType: string, cost: number, estimate: TaskMemoryEstimate) => boolean;

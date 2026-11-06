@@ -59,6 +59,8 @@ export interface RunningTaskSnapshot {
   readonly taskId: string;
   readonly taskType: string;
   readonly cost: number;
+  /** Bytes the run reserved through its memory reporter; absent or 0 when none. */
+  readonly reservedBytes?: number;
 }
 
 export enum TaskPoolRunResult {
@@ -134,6 +136,7 @@ export class TaskPool {
       taskId: runner.id,
       taskType: runner.taskType,
       cost: runner.cost,
+      reservedBytes: runner.memoryReservationBytes,
     }));
   }
 

@@ -40,7 +40,7 @@ Task Manager SHALL expose on the run context a `memory.report(bytes)` call that 
 #### Scenario: report above measurement
 
 - **WHEN** a run reports a peak of 150 MB and the measured attribution gives it 40 MB because twelve runs overlapped
-- **THEN** the run is recorded at 150 MB before live-ratio scaling
+- **THEN** the run's estimate after live-ratio scaling is 150 MB (a report is live bytes, so it is lifted into the allocation domain before the larger value is kept)
 
 #### Scenario: report below measurement
 
@@ -54,7 +54,7 @@ Task Manager SHALL expose on the run context a `memory.report(bytes)` call that 
 
 ### Requirement: Reports are visible per run and per node
 
-The `task-run` event SHALL carry `kibana.task.memory_reported_bytes` (the reported peak, absent when the run did not report) next to `kibana.task.memory_bytes`. `GET /api/task_manager/_health` SHALL report under `adaptive_capacity` the number of running tasks holding a reservation, the reserved total in bytes, and the number of runs that reported in the current window; the same values SHALL be exposed as OpenTelemetry gauges.
+The `task-run` event SHALL carry `kibana.task.memory_reported_bytes` (the reported peak, absent when the run did not report) next to `kibana.task.memory_bytes`. `GET /api/task_manager/_health` SHALL report under `adaptive_capacity` the number of running tasks holding a reservation, the reserved total in bytes, and the number of runs that have reported since the node started; the reservation values SHALL be exposed as OpenTelemetry gauges.
 
 #### Scenario: comparing signals
 

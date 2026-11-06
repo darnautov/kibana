@@ -20,6 +20,7 @@ export const DEFAULT_ADAPTIVE_MAX_INCREASE_PER_DECISION = 5;
 export const DEFAULT_ADAPTIVE_DECISION_INTERVAL_MS = 1000;
 export const DEFAULT_ADAPTIVE_LIGHT_TASK_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_ADAPTIVE_LIGHT_TASK_SLOTS = 10;
+export const DEFAULT_ADAPTIVE_MEMORY_TARGET_RATIO = 0.85;
 export const DEFAULT_MAX_WORKERS = 10;
 export const MGET_DEFAULT_POLL_INTERVAL = 500;
 export const LOW_UTILIZATION_POLL_INTERVAL = 3000;
@@ -158,6 +159,16 @@ export const configSchema = schema.object(
       }),
       /* Write each recurring task's heap estimate to its document and budget claims with it */
       persist_estimates: schema.boolean({ defaultValue: true }),
+      /* Let running tasks reserve and report memory through the run context */
+      task_reports: schema.boolean({ defaultValue: true }),
+      /* Memory limit to budget the resident set against; defaults to the cgroup limit Node reports, none when unknown */
+      memory_limit_bytes: schema.maybe(schema.number({ min: 64 * 1024 * 1024 })),
+      /* Share of the memory limit the resident set may reach before claiming stops */
+      memory_target_ratio: schema.number({
+        min: 0.5,
+        max: 0.95,
+        defaultValue: DEFAULT_ADAPTIVE_MEMORY_TARGET_RATIO,
+      }),
     }),
     /* Lets `runSoon(..., { requestImmediateClaim: true })` request an extra claim cycle. */
     claim_nudge: schema.object({

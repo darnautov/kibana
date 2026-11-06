@@ -45,6 +45,16 @@ interface AdaptiveCapacityHealth {
   heap_baseline_bytes?: number;
   heap_projected_bytes?: number;
   heap_budget_bytes?: number;
+  heap_external_bytes?: number;
+  budget_bytes?: number;
+  memory?: {
+    limit_bytes?: number;
+    target_bytes?: number;
+    rss_bytes?: number;
+    baseline_bytes?: number;
+    projected_bytes?: number;
+    budget_bytes?: number;
+  } | null;
   heap_live_ratio?: number;
   bytes_per_normal_task?: number;
   running_cost?: number;
@@ -53,6 +63,8 @@ interface AdaptiveCapacityHealth {
   last_trigger?: string;
   estimates?: Array<{ task_type: string; bytes_per_cost_unit: number; samples: number }>;
   seeded_instances?: number;
+  reservations?: { tasks: number; bytes: number };
+  reported_runs?: number;
 }
 
 interface HealthResponse {
@@ -154,6 +166,18 @@ const main = async (): Promise<void> => {
               heap_limit_mb: mb(adaptive.heap_limit_bytes),
               heap_target_mb: mb(adaptive.heap_target_bytes),
               heap_budget_mb: mb(adaptive.heap_budget_bytes),
+              heap_external_mb: mb(adaptive.heap_external_bytes),
+              budget_mb: mb(adaptive.budget_bytes),
+              memory: adaptive.memory
+                ? {
+                    limit_mb: mb(adaptive.memory.limit_bytes),
+                    target_mb: mb(adaptive.memory.target_bytes),
+                    rss_mb: mb(adaptive.memory.rss_bytes),
+                    baseline_mb: mb(adaptive.memory.baseline_bytes),
+                    projected_mb: mb(adaptive.memory.projected_bytes),
+                    budget_mb: mb(adaptive.memory.budget_bytes),
+                  }
+                : undefined,
               heap_projected_mb: mb(adaptive.heap_projected_bytes),
               heap_baseline_mb: mb(adaptive.heap_baseline_bytes),
               bytes_per_task_mb: mb(adaptive.bytes_per_normal_task),
@@ -162,6 +186,8 @@ const main = async (): Promise<void> => {
               free_slots: adaptive.free_slots,
               decisions: adaptive.decisions,
               seeded_instances: adaptive.seeded_instances,
+              reservations: adaptive.reservations,
+              reported_runs: adaptive.reported_runs,
               estimates: adaptive.estimates,
             }
           : undefined,
@@ -183,9 +209,11 @@ const main = async (): Promise<void> => {
           sample.task_manager.capacity?.mode === 'auto' ? '(auto)' : ''
         } ` +
         (adaptive
-          ? `budget ${mb(adaptive.heap_budget_bytes)} MB @ ${mb(
-              adaptive.bytes_per_normal_task
-            )} MB/task free ${adaptive.free_slots} running ${adaptive.running_cost} `
+          ? `budget ${mb(adaptive.budget_bytes ?? adaptive.heap_budget_bytes)} MB${
+              adaptive.memory ? ` (rss ${mb(adaptive.memory.rss_bytes)} MB)` : ''
+            } @ ${mb(adaptive.bytes_per_normal_task)} MB/task free ${adaptive.free_slots} running ${
+              adaptive.running_cost
+            } `
           : '') +
         `load p50 ${runtime?.load?.p50 ?? '?'} overdue ${sample.task_manager.overdue ?? '?'} ` +
         `runs ${sample.task_manager.task_run_overall?.total ?? '?'}`

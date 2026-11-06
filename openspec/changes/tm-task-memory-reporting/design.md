@@ -18,7 +18,7 @@ A reservation is a statement about the current run only, so it is not learned. T
 
 ### D4. Reporter is created per run by the runner
 
-`TaskManagerRunner` builds a `TaskMemoryReporter` for each run and passes it as `context.memory`. In fixed mode, or when `adaptive_capacity.task_reports` is `false`, it builds the no-op reporter, so task code is identical in every mode and the fixed path adds one object allocation per run and nothing else. At run end the runner passes the peak report to `observeRunEnd` together with the snapshot it already builds, and writes `kibana.task.memory_reported_bytes` to the `task-run` event when a report exists.
+`TaskManagerRunner` builds a `TaskMemoryReporter` for each run and passes it as `context.memory`. The field is optional on `RunContext` only because some two hundred test fixtures across Kibana build a context by hand; Task Manager always sets it, and task code uses `memory?.report()` rather than checking the mode. In fixed mode, or when `adaptive_capacity.task_reports` is `false`, it builds the no-op reporter, so task code is identical in every mode and the fixed path adds one object allocation per run and nothing else. At run end the runner passes the peak report to `observeRunEnd` together with the snapshot it already builds, and writes `kibana.task.memory_reported_bytes` to the `task-run` event when a report exists.
 
 ### D5. First consumers
 
@@ -26,7 +26,7 @@ Alerting v2's query service already receives `maxResponseSize` and counts bytes 
 
 ## Observability
 
-- `_health` → `adaptive_capacity.reservations: { tasks, bytes }` and `adaptive_capacity.reported_runs` (last decision window).
+- `_health` → `adaptive_capacity.reservations: { tasks, bytes }` and `adaptive_capacity.reported_runs` (since the node started).
 - OTel gauges `kibana.task_manager.adaptive_capacity.reservation.bytes` and `.reservation.tasks`.
 - Event log `kibana.task.memory_reported_bytes` next to `memory_bytes`.
 - Claim debug line gains `reserved` beside `heap budget / planned / heap limited / seeded`.

@@ -56,6 +56,9 @@ interface RunStats {
   /** Heap attributed per run by adaptive capacity (`kibana.task.memory_bytes`); 0 without it. */
   readonly memoryP50Mb: number;
   readonly memoryP99Mb: number;
+  /** Peak the task reported itself (`kibana.task.memory_reported_bytes`); 0 when no run reported. */
+  readonly reportedP50Mb: number;
+  readonly reportedP99Mb: number;
 }
 
 interface Summary extends RunStats {
@@ -109,6 +112,7 @@ interface EventLogAggs {
     duration: { values: Record<string, number> };
     delay: { values: Record<string, number> };
     memory: { values: Record<string, number | null> };
+    reported: { values: Record<string, number | null> };
     outcome: { buckets: Array<{ key: string; doc_count: number }> };
   };
 }
@@ -150,6 +154,9 @@ const queryRuns = async (
         duration: { percentiles: { field: 'event.duration', percents: [50, 99] } },
         delay: { percentiles: { field: 'kibana.task.schedule_delay', percents: [50, 99] } },
         memory: { percentiles: { field: 'kibana.task.memory_bytes', percents: [50, 99] } },
+        reported: {
+          percentiles: { field: 'kibana.task.memory_reported_bytes', percents: [50, 99] },
+        },
         outcome: { terms: { field: 'event.outcome' } },
       },
     },
@@ -168,6 +175,8 @@ const queryRuns = async (
     pickupDelayP99s: pct(result.aggregations.delay.values, '99.0'),
     memoryP50Mb: (result.aggregations.memory.values['50.0'] ?? 0) / 2 ** 20,
     memoryP99Mb: (result.aggregations.memory.values['99.0'] ?? 0) / 2 ** 20,
+    reportedP50Mb: (result.aggregations.reported.values['50.0'] ?? 0) / 2 ** 20,
+    reportedP99Mb: (result.aggregations.reported.values['99.0'] ?? 0) / 2 ** 20,
   };
 };
 
@@ -227,6 +236,7 @@ const main = async (): Promise<void> => {
     'dur p50/p99 s',
     'pickup p50/p99 s',
     'run heap p50/p99 MB',
+    'reported p50/p99 MB',
     'heap peak/limit MB',
     'ELU avg',
     'EL delay max ms',
@@ -244,6 +254,7 @@ const main = async (): Promise<void> => {
     `${r.durationP50s.toFixed(2)}/${r.durationP99s.toFixed(2)}`,
     `${r.pickupDelayP50s.toFixed(2)}/${r.pickupDelayP99s.toFixed(2)}`,
     `${r.memoryP50Mb.toFixed(1)}/${r.memoryP99Mb.toFixed(1)}`,
+    `${r.reportedP50Mb.toFixed(1)}/${r.reportedP99Mb.toFixed(1)}`,
     `${r.heapPeakMb}/${r.heapLimitMb}`,
     r.eluAvg.toFixed(2),
     r.eventLoopDelayMaxMs.toFixed(0),

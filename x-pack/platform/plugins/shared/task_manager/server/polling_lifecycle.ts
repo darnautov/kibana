@@ -225,6 +225,8 @@ export class TaskPollingLifecycle implements ITaskEventEmitter<TaskLifecycleEven
           lightTaskBytes: adaptive.light_task_bytes,
           lightTaskSlots: adaptive.light_task_slots,
           persistEstimates: adaptive.persist_estimates,
+          memoryLimitBytes: adaptive.memory_limit_bytes,
+          memoryTargetRatio: adaptive.memory_target_ratio,
         },
         // The first decision runs in the controller's constructor, before the pool exists.
         getRunningTasks: () => (this.pool ? this.pool.getRunningTasks() : []),
@@ -519,7 +521,9 @@ export class TaskPollingLifecycle implements ITaskEventEmitter<TaskLifecycleEven
       apiKeyStrategy: this.apiKeyStrategy,
       eventLogger: this.eventLogger,
       enrichFakeRequest: this.enrichFakeRequest,
-      observeRunEnd: adaptiveCapacity ? (task) => adaptiveCapacity.observeRunEnd(task) : undefined,
+      observeRunEnd: adaptiveCapacity
+        ? (task, reportedBytes) => adaptiveCapacity.observeRunEnd(task, reportedBytes)
+        : undefined,
     });
   };
 

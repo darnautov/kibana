@@ -236,4 +236,54 @@ describe('TaskMemoryEstimator', () => {
       expect(estimator.estimateBytes('task-a', 't', 2)).toBe(40 * MB);
     });
   });
+
+  describe('task reports', () => {
+    const observeWithReport = (reported: number | undefined, measuredMb: number) => {
+      const estimator = new TaskMemoryEstimator({ defaultBytesPerTask: 64 * MB });
+      estimator.sample(0, [run('r1', 'type')]);
+      estimator.sample(measuredMb * MB, [run('r1', 'type')]);
+      const observation = estimator.finalizeRun(run('r1', 'type'), reported);
+      return { estimator, observation };
+    };
+
+    it('records a report above the measured share', () => {
+      const { estimator, observation } = observeWithReport(150 * MB, 40);
+      expect(observation?.bytes).toBe(150 * MB);
+      expect(estimator.estimateBytes('task-r1', 'type', 2)).toBe(150 * MB);
+      expect(estimator.reportedRunCount()).toBe(1);
+    });
+
+    it('keeps the measured share when the report is below it', () => {
+      const { estimator, observation } = observeWithReport(10 * MB, 90);
+      expect(observation?.bytes).toBe(90 * MB);
+      expect(estimator.estimateBytes('task-r1', 'type', 2)).toBe(90 * MB);
+      expect(estimator.reportedRunCount()).toBe(1);
+    });
+
+    it('is unchanged for a run that did not report', () => {
+      const { estimator, observation } = observeWithReport(undefined, 90);
+      expect(observation?.bytes).toBe(90 * MB);
+      expect(estimator.reportedRunCount()).toBe(0);
+    });
+
+    it('lifts a report into the allocation domain so the scaled estimate still covers it', () => {
+      const estimator = new TaskMemoryEstimator({
+        defaultBytesPerTask: 64 * MB,
+        calibrationBytes: 100 * MB,
+        alpha: 1,
+      });
+      // 400 MB allocated, 100 MB live after collection: ratio 0.25.
+      estimator.sample(0, [run('r0', 'type')]);
+      estimator.liveSample(0);
+      estimator.sample(400 * MB, [run('r0', 'type')]);
+      estimator.taskEnded(run('r0', 'type'));
+      estimator.liveSample(100 * MB);
+      expect(estimator.liveRatio()).toBe(0.25);
+
+      estimator.sample(400 * MB, [run('r1', 'type')]);
+      estimator.sample(410 * MB, [run('r1', 'type')]);
+      estimator.finalizeRun(run('r1', 'type'), 150 * MB);
+      expect(estimator.estimateBytes('task-r1', 'type', 2)).toBe(150 * MB);
+    });
+  });
 });
